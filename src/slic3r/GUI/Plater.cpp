@@ -1120,14 +1120,28 @@ Sidebar::Sidebar(Plater *parent)
 
     p->sizer_params->Add(p->m_search_bar, 0, wxALL | wxEXPAND, 0);
     p->m_object_toolbar = new wxPanel(p->scrolled);
+    p->m_object_toolbar->SetBackgroundColour(p->scrolled->GetBackgroundColour());
+    wxGetApp().UpdateDarkUI(p->m_object_toolbar);
     auto toolbar_sizer = new wxBoxSizer(wxHORIZONTAL);
     p->m_reorder_label = new Label(p->m_object_toolbar, _L("Print order:"));
-    p->m_reorder_label->SetFont(Label::Body_12);
+    p->m_reorder_label->SetFont(Label::Body_13);
+    p->m_reorder_label->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+    wxGetApp().UpdateDarkUI(p->m_reorder_label);
     toolbar_sizer->Add(p->m_reorder_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     p->m_btn_reorder = new Button(p->m_object_toolbar, _L("Reorder"));
-    p->m_btn_reorder->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
     p->m_btn_apply_reorder = new Button(p->m_object_toolbar, _L("Apply"));
-    p->m_btn_apply_reorder->SetStyle(ButtonStyle::Confirm, ButtonType::Parameter);
+    auto configure_toolbar_button = [this](Button* btn, ButtonStyle style) {
+        if (!btn)
+            return;
+        btn->SetStyle(style, ButtonType::Parameter);
+        btn->SetPaddingSize(this->FromDIP(wxSize(10, 4)));
+        const wxSize btn_size = this->FromDIP(wxSize(96, 28));
+        btn->SetMinSize(btn_size);
+        btn->SetSize(btn_size);
+        wxGetApp().UpdateDarkUI(btn);
+    };
+    configure_toolbar_button(p->m_btn_reorder, ButtonStyle::Regular);
+    configure_toolbar_button(p->m_btn_apply_reorder, ButtonStyle::Confirm);
     p->m_btn_apply_reorder->Hide();
     toolbar_sizer->Add(p->m_btn_reorder, 0, wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     toolbar_sizer->Add(p->m_btn_apply_reorder, 0);
@@ -1138,6 +1152,7 @@ Sidebar::Sidebar(Plater *parent)
     p->sizer_params->Add(p->m_object_list, 1, wxEXPAND | wxTOP, 0);
     scrolled_sizer->Add(p->sizer_params, 2, wxEXPAND | wxLEFT, 0);
     p->m_object_list->Hide();
+    p->m_object_toolbar->Hide();
     p->m_search_bar->Hide();
     // Frequently Object Settings
     p->object_settings = new ObjectSettings(p->scrolled);
