@@ -39,6 +39,7 @@
 #include "format.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "SavePresetDialog.hpp"
+#include "RenamePresetDialog.hpp"
 #include "EditGCodeDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
@@ -231,6 +232,11 @@ void Tab::create_preset_tab()
     //add_scaled_button(panel, &m_btn_compare_preset, "compare");
     add_scaled_button(m_top_panel, &m_btn_save_preset, "save");
     add_scaled_button(m_top_panel, &m_btn_delete_preset, "cross");
+    if (m_type == Preset::TYPE_PRINTER || m_type == Preset::TYPE_FILAMENT) {
+        add_scaled_button(m_top_panel, &m_btn_rename_preset, "edit");
+        m_btn_rename_preset->SetToolTip(_L("Rename preset"));
+        m_btn_rename_preset->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { rename_preset(); });
+    }
     //if (m_type == Preset::Type::TYPE_PRINTER)
     //    add_scaled_button(panel, &m_btn_edit_ph_printer, "cog");
 
@@ -368,6 +374,9 @@ void Tab::create_preset_tab()
         m_top_sizer->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
         m_top_sizer->AddStretchSpacer(1);
     }
+
+    if (m_btn_rename_preset)
+        m_top_sizer->Add(m_btn_rename_preset, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
 
     const float scale_factor = /*wxGetApp().*/em_unit(this)*0.1;// GetContentScaleFactor();
 #ifndef DISABLE_UNDO_SYS
@@ -5039,6 +5048,12 @@ void Tab::update_btns_enabling()
     m_btn_delete_preset->Show((m_type == Preset::TYPE_PRINTER && m_preset_bundle->physical_printers.has_selection())
                               || (!preset.is_default && !preset.is_system));
 
+    if (m_btn_rename_preset) {
+        bool can_rename = !preset.is_default && !preset.is_system && !preset.is_project_embedded && !m_just_edit;
+        m_btn_rename_preset->Enable(can_rename);
+        m_btn_rename_preset->Show(true);
+    }
+
     //if (m_btn_edit_ph_printer)
     //    m_btn_edit_ph_printer->SetToolTip( m_preset_bundle->physical_printers.has_selection() ?
     //                                       _L("Edit physical printer") : _L("Add physical printer"));
@@ -5834,6 +5849,48 @@ void Tab::save_preset(std::string name /*= ""*/, bool detach, bool save_to_proje
     wxGetApp().mainframe->diff_dialog.update_presets(m_type);
 }
 
+void Tab::rename_preset()
+{
+    if (!m_presets)
+        return;
+
+    const Preset &selected = m_presets->get_selected_preset();
+    if (selected.is_system || selected.is_default || selected.is_project_embedded) {
+        MessageDialog dlg(this,
+                          _L("System and project presets cannot be renamed."),
+                          _L("Rename preset"),
+                          wxICON_INFORMATION | wxOK);
+        dlg.ShowModal();
+        return;
+    }
+
+    RenamePresetDialog dlg(this, m_presets, selected);
+    if (dlg.ShowModal() != wxID_OK)
+        return;
+
+    const std::string old_name = selected.name;
+    const std::string new_name = dlg.new_name();
+    if (new_name.empty() || new_name == old_name)
+        return;
+
+    std::string error;
+    if (!m_preset_bundle->rename_preset(m_type, old_name, new_name, &error)) {
+        MessageDialog dlg_error(this,
+                                error.empty() ? _L("Unable to rename preset.") : from_u8(error),
+                                _L("Rename preset"),
+                                wxICON_ERROR | wxOK);
+        dlg_error.ShowModal();
+        return;
+    }
+
+    update_tab_ui();
+    on_presets_changed();
+    if (m_type == Preset::TYPE_FILAMENT && wxGetApp().plater())
+        wxGetApp().plater()->sidebar().update_presets_from_to(m_type, old_name, new_name);
+    m_preset_bundle->export_selections(*wxGetApp().app_config);
+    update_btns_enabling();
+}
+
 // Called for a currently selected preset.
 void Tab::delete_preset()
 {
@@ -6244,9 +6301,12 @@ void Tab::set_just_edit(bool just_edit)
     if (just_edit) {
         m_presets_choice->Disable();
         m_btn_delete_preset->Disable();
+        if (m_btn_rename_preset)
+            m_btn_rename_preset->Disable();
     } else {
         m_presets_choice->Enable();
         m_btn_delete_preset->Enable();
+        update_btns_enabling();
     }
 }
 

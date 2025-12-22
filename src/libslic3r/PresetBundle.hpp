@@ -263,6 +263,7 @@ public:
     // Unselected option would be reverted to the beginning values
     //BBS: add project embedded preset logic
     void                        save_changes_for_preset(const std::string& new_name, Preset::Type type, const std::vector<std::string>& unselected_options, bool save_to_project = false);
+    bool                        rename_preset(Preset::Type type, const std::string &old_name, const std::string &new_name, std::string *error = nullptr);
 
     std::pair<PresetsConfigSubstitutions, std::string> load_system_models_from_json(ForwardCompatibilitySubstitutionRule compatibility_rule);
     std::pair<PresetsConfigSubstitutions, std::string> load_system_filaments_json(ForwardCompatibilitySubstitutionRule compatibility_rule);

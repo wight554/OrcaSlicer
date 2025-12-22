@@ -29,6 +29,7 @@
 #include <boost/format.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
+#include <boost/system/error_code.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 //BBS: add regex
@@ -2368,6 +2369,100 @@ void PresetCollection::save_current_preset(const std::string &new_name, bool det
         this->get_selected_preset().save(nullptr);
 }
 
+bool PresetCollection::rename_preset(const std::string &old_name, const std::string &new_name, std::string &error)
+{
+    if (old_name == new_name)
+        return true;
+    if (new_name.empty()) {
+        error = "Name is empty.";
+        return false;
+    }
+
+    lock();
+    auto it_old = this->find_preset_internal(old_name);
+    if (it_old == m_presets.end() || it_old->name != old_name) {
+        unlock();
+        error = "Preset not found.";
+        return false;
+    }
+
+    Preset &preset = *it_old;
+    if (preset.is_system || preset.is_default || preset.is_project_embedded) {
+        unlock();
+        error = "Preset cannot be renamed.";
+        return false;
+    }
+
+    auto it_existing = this->find_preset_internal(new_name);
+    if (it_existing != m_presets.end() && it_existing->name == new_name) {
+        unlock();
+        error = "Preset with this name already exists.";
+        return false;
+    }
+
+    const bool is_base = is_base_preset(preset);
+    const std::string old_file = preset.file;
+    const std::string new_file = path_from_name(new_name, is_base);
+
+    boost::system::error_code ec;
+    fs::create_directories(fs::path(new_file).parent_path());
+    if (!old_file.empty() && fs::exists(old_file)) {
+        fs::rename(old_file, new_file, ec);
+        if (ec) {
+            unlock();
+            error = ec.message();
+            return false;
+        }
+    }
+
+    if (!old_file.empty()) {
+        fs::path old_info(old_file);
+        fs::path new_info(new_file);
+        old_info.replace_extension(".info");
+        new_info.replace_extension(".info");
+        if (fs::exists(old_info)) {
+            boost::system::error_code info_ec;
+            fs::rename(old_info, new_info, info_ec);
+            if (info_ec) {
+                unlock();
+                error = info_ec.message();
+                return false;
+            }
+        }
+    }
+
+    preset.file = new_file;
+    preset.name = new_name;
+    preset.sync_info = "update";
+
+    auto update_ids = [&](Preset &p) {
+        if (m_type == Preset::TYPE_PRINTER)
+            p.config.option<ConfigOptionString>("printer_settings_id", true)->value = new_name;
+        else if (m_type == Preset::TYPE_FILAMENT)
+            p.config.option<ConfigOptionStrings>("filament_settings_id", true)->values[0] = new_name;
+        else if (m_type == Preset::TYPE_PRINT)
+            p.config.option<ConfigOptionString>("print_settings_id", true)->value = new_name;
+    };
+
+    update_ids(preset);
+    if (m_edited_preset.name == old_name) {
+        m_edited_preset.name = new_name;
+        update_ids(m_edited_preset);
+    }
+
+    std::sort(m_presets.begin() + m_num_default_presets, m_presets.end());
+    this->select_preset_by_name(new_name, true);
+
+    const Preset *parent = this->get_selected_preset_parent();
+    if (parent)
+        this->get_selected_preset().save(const_cast<DynamicPrintConfig*>(&parent->config));
+    else
+        this->get_selected_preset().save(nullptr);
+
+    unlock();
+    return true;
+}
+
 bool PresetCollection::delete_current_preset()
 {
     Preset &selected = this->get_selected_preset();
@@ -3555,6 +3650,22 @@ bool PhysicalPrinterCollection::delete_preset_from_printers( const std::string& 
 
     unselect_printer();
     return true;
+}
+
+void PhysicalPrinterCollection::replace_preset_name(const std::string& old_name, const std::string& new_name)
+{
+    bool selection_changed = (m_selected_preset == old_name);
+    for (PhysicalPrinter &printer : m_printers) {
+        auto it = printer.preset_names.find(old_name);
+        if (it == printer.preset_names.end())
+            continue;
+        printer.preset_names.erase(it);
+        printer.preset_names.insert(new_name);
+        printer.update_preset_names_in_config();
+        printer.save(nullptr);
+    }
+    if (selection_changed)
+        m_selected_preset = new_name;
 }
 
 // Get list of printers which have more than one preset and "preset_names" preset is one of them

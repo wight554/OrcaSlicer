@@ -130,6 +130,8 @@
 #include "Widgets/RoundedRectangle.hpp"
 #include "Widgets/RadioGroup.hpp"
 #include "Widgets/CheckBox.hpp"
+#include "RenamedProfilesDialog.hpp"
+#include "libslic3r/PresetRenameHistory.hpp"
 #include "Widgets/Button.hpp"
 
 #include "GUI_ObjectTable.hpp"
@@ -3804,6 +3806,55 @@ void read_binary_stl(const std::string& filename, std::string& model_id, std::st
     return;
 }
 
+namespace {
+
+std::vector<RenameUpdateOption> collect_rename_update_options(const DynamicPrintConfig &config)
+{
+    std::vector<RenameUpdateOption> options;
+    auto &history = PresetRenameHistory::instance();
+
+    if (const auto *printer = dynamic_cast<const ConfigOptionString*>(config.optptr("printer_settings_id"))) {
+        const std::string &old_name = printer->value;
+        if (!old_name.empty()) {
+            if (auto resolved = history.resolve(Preset::TYPE_PRINTER, old_name); resolved && *resolved != old_name)
+                options.push_back({Preset::TYPE_PRINTER, old_name, *resolved});
+        }
+    }
+
+    if (const auto *filaments = dynamic_cast<const ConfigOptionStrings*>(config.optptr("filament_settings_id"))) {
+        std::set<std::string> seen;
+        for (const std::string &name : filaments->values) {
+            if (name.empty() || !seen.insert(name).second)
+                continue;
+            if (auto resolved = history.resolve(Preset::TYPE_FILAMENT, name); resolved && *resolved != name)
+                options.push_back({Preset::TYPE_FILAMENT, name, *resolved});
+        }
+    }
+
+    return options;
+}
+
+void apply_rename_updates(DynamicPrintConfig &config, const std::vector<RenameUpdateOption> &selected)
+{
+    if (selected.empty())
+        return;
+
+    for (const auto &entry : selected) {
+        if (entry.type == Preset::TYPE_PRINTER) {
+            if (auto opt = config.option<ConfigOptionString>("printer_settings_id", false))
+                opt->value = entry.new_name;
+        } else if (entry.type == Preset::TYPE_FILAMENT) {
+            if (auto opt = config.option<ConfigOptionStrings>("filament_settings_id", false)) {
+                for (std::string &value : opt->values)
+                    if (value == entry.old_name)
+                        value = entry.new_name;
+            }
+        }
+    }
+}
+
+} // namespace
+
 // BBS: backup & restore
 std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_files, LoadStrategy strategy, bool ask_multi)
 {
@@ -4145,6 +4196,14 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         if (!dlg_cont) {
                             q->skip_thumbnail_invalid = false;
                             return empty_result;
+                        }
+
+                        auto rename_options = collect_rename_update_options(config_loaded);
+                        if (!rename_options.empty()) {
+                            RenamedProfilesDialog dialog(q, rename_options);
+                            if (dialog.ShowModal() == wxID_OK) {
+                                apply_rename_updates(config_loaded, dialog.selection());
+                            }
                         }
 
                         // Based on the printer technology field found in the loaded config, select the base for the config,

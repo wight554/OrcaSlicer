@@ -523,6 +523,7 @@ public:
     // All presets are marked as not modified and the new preset is activated.
     //BBS: add project embedded preset logic
     void            save_current_preset(const std::string &new_name, bool detach = false, bool save_to_project = false, Preset* _curr_preset = nullptr, const Preset* _current_printer = nullptr);
+    bool            rename_preset(const std::string &old_name, const std::string &new_name, std::string &error);
 
     // Delete the current preset, activate the first visible preset.
     // returns true if the preset was deleted successfully.
@@ -962,6 +963,7 @@ public:
     // If there is last preset for the printer and first_check== false, then delete this printer
     // returns true if all presets were deleted successfully.
     bool            delete_preset_from_printers(const std::string& preset_name);
+    void            replace_preset_name(const std::string& old_name, const std::string& new_name);
 
     // Get list of printers which have more than one preset and "preset_names" preset is one of them
     std::vector<std::string> get_printers_with_preset( const std::string &preset_name);

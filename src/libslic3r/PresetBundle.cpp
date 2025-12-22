@@ -1,6 +1,7 @@
 #include <cassert>
 
 #include "PresetBundle.hpp"
+#include "PresetRenameHistory.hpp"
 #include "PrintConfig.hpp"
 #include "libslic3r.h"
 #include "Utils.hpp"
@@ -49,6 +50,27 @@ const char *PresetBundle::ORCA_DEFAULT_PRINTER_MODEL = "MyKlipper 0.4 nozzle";
 const char *PresetBundle::ORCA_DEFAULT_PRINTER_VARIANT = "0.4";
 const char *PresetBundle::ORCA_DEFAULT_FILAMENT = "Generic PLA @System";
 const char *PresetBundle::ORCA_FILAMENT_LIBRARY = "OrcaFilamentLibrary";
+
+namespace {
+bool replace_value(std::vector<std::string> &values, const std::string &old_value, const std::string &new_value)
+{
+    bool changed = false;
+    for (std::string &value : values) {
+        if (value == old_value) {
+            value = new_value;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+bool replace_in_option(ConfigOptionStrings *opt, const std::string &old_value, const std::string &new_value)
+{
+    if (!opt)
+        return false;
+    return replace_value(opt->values, old_value, new_value);
+}
+} // namespace
 
 PresetBundle::PresetBundle()
     : prints(Preset::TYPE_PRINT, Preset::print_options(), static_cast<const PrintRegionConfig &>(FullPrintConfig::defaults()))
@@ -1508,6 +1530,90 @@ void PresetBundle::save_changes_for_preset(const std::string& new_name, Preset::
         // synchronize the first filament presets.
         set_filament_preset(0, filaments.get_selected_preset_name());
     }
+}
+
+bool PresetBundle::rename_preset(Preset::Type type, const std::string &old_name, const std::string &new_name, std::string *error)
+{
+    if (type != Preset::TYPE_PRINTER && type != Preset::TYPE_FILAMENT) {
+        if (error)
+            *error = "Unsupported preset type.";
+        return false;
+    }
+
+    PresetCollection *collection = type == Preset::TYPE_PRINTER ? static_cast<PresetCollection*>(&printers)
+                                                                : static_cast<PresetCollection*>(&filaments);
+    std::string local_error;
+    if (!collection->rename_preset(old_name, new_name, local_error)) {
+        if (error)
+            *error = local_error;
+        return false;
+    }
+
+    auto update_inherits = [&](PresetCollection &target) {
+        for (auto it = target.lbegin(); it != target.end(); ++it) {
+            Preset &preset = *it;
+            if (preset.is_system || preset.is_default)
+                continue;
+            if (preset.inherits() == old_name) {
+                preset.inherits() = new_name;
+                const Preset *parent = target.get_preset_parent(preset);
+                preset.save(parent ? const_cast<DynamicPrintConfig*>(&parent->config) : nullptr);
+            }
+        }
+    };
+
+    if (type == Preset::TYPE_PRINTER) {
+        auto update_compatible = [&](PresetCollection &target) {
+            for (auto it = target.lbegin(); it != target.end(); ++it) {
+                Preset &preset = *it;
+                if (preset.is_system || preset.is_default)
+                    continue;
+                bool changed = replace_in_option(preset.config.option<ConfigOptionStrings>("compatible_printers", false), old_name, new_name);
+                if (changed) {
+                    const Preset *parent = target.get_preset_parent(preset);
+                    preset.save(parent ? const_cast<DynamicPrintConfig*>(&parent->config) : nullptr);
+                }
+            }
+        };
+
+        update_compatible(prints);
+        update_compatible(filaments);
+        update_compatible(sla_prints);
+        update_compatible(sla_materials);
+        update_inherits(printers);
+
+        if (auto opt = project_config.option<ConfigOptionString>("printer_settings_id", false); opt && opt->value == old_name)
+            opt->value = new_name;
+        replace_in_option(project_config.option<ConfigOptionStrings>("print_compatible_printers", false), old_name, new_name);
+        replace_in_option(project_config.option<ConfigOptionStrings>("compatible_printers", false), old_name, new_name);
+
+        physical_printers.replace_preset_name(old_name, new_name);
+    } else if (type == Preset::TYPE_FILAMENT) {
+        update_inherits(filaments);
+
+        auto update_printer_defaults = [&]() {
+            for (auto it = printers.lbegin(); it != printers.end(); ++it) {
+                Preset &printer = *it;
+                if (printer.is_system || printer.is_default)
+                    continue;
+                if (replace_in_option(printer.config.option<ConfigOptionStrings>("default_filament_profile", false), old_name, new_name)) {
+                    const Preset *parent = printers.get_preset_parent(printer);
+                    printer.save(parent ? const_cast<DynamicPrintConfig*>(&parent->config) : nullptr);
+                }
+            }
+        };
+        update_printer_defaults();
+
+        if (replace_value(filament_presets, old_name, new_name))
+            update_multi_material_filament_presets();
+
+        replace_in_option(project_config.option<ConfigOptionStrings>("filament_settings_id", false), old_name, new_name);
+        replace_in_option(project_config.option<ConfigOptionStrings>("default_filament_profile", false), old_name, new_name);
+    }
+
+    PresetRenameHistory::instance().add_entry(type, old_name, new_name);
+    update_compatible(PresetSelectCompatibleType::Never);
+    return true;
 }
 
 void PresetBundle::load_installed_filaments(AppConfig &config)
