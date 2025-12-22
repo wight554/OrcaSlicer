@@ -1412,6 +1412,19 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                     (*old_instance)->printable 		    = (*new_instance)->printable;
   				}
 	        }
+
+            if (model_object.instances.size() == model_object_new.instances.size()) {
+                bool arrange_order_changed = false;
+                auto it_new = model_object_new.instances.begin();
+                for (auto it_old = model_object.instances.begin(); it_old != model_object.instances.end(); ++it_old, ++it_new) {
+                    if ((*it_old)->arrange_order != (*it_new)->arrange_order) {
+                        (*it_old)->arrange_order = (*it_new)->arrange_order;
+                        arrange_order_changed = true;
+                    }
+                }
+                if (arrange_order_changed)
+                    update_apply_status(this->invalidate_step(psGCodeExport));
+            }
         }
     }
 
