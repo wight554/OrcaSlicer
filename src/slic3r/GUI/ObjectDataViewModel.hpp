@@ -352,20 +352,21 @@ public:
     std::map<int, std::map<int, int>> &get_ui_and_3d_volume_map() { return m_ui_and_3d_volume_maps; }
     int   get_real_volume_index_in_3d(int ui_object_value, int ui_volume_value)
     {
-        if (m_ui_and_3d_volume_maps.find(ui_object_value) != m_ui_and_3d_volume_maps.end()) {
-            auto cur_map = m_ui_and_3d_volume_maps[ui_object_value];
-            if (cur_map.find(ui_volume_value) != cur_map.end()) { return cur_map[ui_volume_value]; }
+        auto it_object = m_ui_and_3d_volume_maps.find(ui_object_value);
+        if (it_object != m_ui_and_3d_volume_maps.end()) {
+            auto it_volume = it_object->second.find(ui_volume_value);
+            if (it_volume != it_object->second.end())
+                return it_volume->second;
         }
         return ui_volume_value;
     }
     int get_real_volume_index_in_ui(int ui_object_value, int _3d_value)
     {
-        if (m_ui_and_3d_volume_maps.find(ui_object_value) != m_ui_and_3d_volume_maps.end()) {
-            auto cur_map = m_ui_and_3d_volume_maps[ui_object_value];
-            for (auto item : cur_map) {
-                if (item.second == _3d_value) {
+        auto it_object = m_ui_and_3d_volume_maps.find(ui_object_value);
+        if (it_object != m_ui_and_3d_volume_maps.end()) {
+            for (const auto& item : it_object->second) {
+                if (item.second == _3d_value)
                     return item.first;
-                }
             }
         }
         return _3d_value;
