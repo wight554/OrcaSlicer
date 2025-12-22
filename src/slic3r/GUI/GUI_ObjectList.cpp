@@ -5825,6 +5825,24 @@ void ObjectList::reload_all_plates(bool notify_partplate)
     wxGetApp().plater()->get_view3D_canvas3D()->update_instance_printable_state_for_objects(obj_idxs);
 }
 
+void ObjectList::set_plate_filter(std::optional<int> plate_idx)
+{
+    if (!m_objects_model)
+        return;
+    m_objects_model->SetPlateFilter(plate_idx);
+    UnselectAll();
+    if (plate_idx) {
+        wxDataViewItem plate_item = m_objects_model->GetItemByPlateId(*plate_idx);
+        if (plate_item)
+            Expand(plate_item);
+    }
+}
+
+void ObjectList::clear_plate_filter()
+{
+    set_plate_filter(std::nullopt);
+}
+
 void ObjectList::on_plate_selected(int plate_index)
 {
     wxDataViewItem item = m_objects_model->GetItemByPlateId(plate_index);

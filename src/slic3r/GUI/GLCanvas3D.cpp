@@ -703,7 +703,8 @@ GLCanvas3D::Mouse::Mouse()
 {
 }
 
-void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_instances) const
+void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_instances,
+                                const std::vector<Plater::ReorderLabel>* custom_labels) const
 {
     if (!m_enabled || !is_shown() || m_canvas.get_gizmos_manager().is_running())
         return;
@@ -765,15 +766,23 @@ void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_
     }
 
     // updates print order strings
-    if (sorted_instances.size() > 0) {
+    if (!sorted_instances.empty()) {
         for (size_t i = 0; i < sorted_instances.size(); ++i) {
             size_t id = sorted_instances[i]->id().id;
-            std::vector<Owner>::iterator it = std::find_if(owners.begin(), owners.end(), [id](const Owner& owner) {
+            auto it = std::find_if(owners.begin(), owners.end(), [id](const Owner& owner) {
                 return owner.model_instance_id == id;
-                });
+            });
             if (it != owners.end())
-                //it->print_order = std::string((_(L("Sequence"))).ToUTF8()) + "#: " + std::to_string(i + 1);
                 it->print_order = std::string((_(L("Sequence"))).ToUTF8()) + "#: " + std::to_string(sorted_instances[i]->arrange_order);
+        }
+    }
+    if (custom_labels && !custom_labels->empty()) {
+        for (const auto& label : *custom_labels) {
+            auto it = std::find_if(owners.begin(), owners.end(), [&label](const Owner& owner) {
+                return owner.model_instance_id == label.instance_id;
+            });
+            if (it != owners.end())
+                it->print_order = label.text;
         }
     }
 
@@ -4112,6 +4121,7 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
 
     bool any_gizmo_active = m_gizmos.get_current() != nullptr;
     bool swap_mouse_buttons = wxGetApp().app_config->get_bool("swap_mouse_buttons");
+    bool reorder_mode = wxGetApp().plater()->is_reorder_mode_active();
 
     if (m_mouse.drag.move_requires_threshold && m_mouse.is_move_start_threshold_position_2D_defined() && m_mouse.is_move_threshold_met(pos)) {
         m_mouse.drag.move_requires_threshold = false;
@@ -4191,6 +4201,18 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
                 // Select volume in this 3D canvas.
                 // Don't deselect a volume if layer editing is enabled or any gizmo is active. We want the object to stay selected
                 // during the scene manipulation.
+
+                if (reorder_mode && evt.LeftDown() && !m_hover_volume_idxs.empty()) {
+                    int volume_idx = get_first_hover_volume_idx();
+                    if (volume_idx >= 0) {
+                        int object_idx = m_volumes.volumes[volume_idx]->object_idx();
+                        if (object_idx >= 0 && wxGetApp().plater()->handle_reorder_pick(object_idx)) {
+                            m_mouse.ignore_left_up = true;
+                            m_mouse.set_start_position_3D_as_invalid();
+                            return;
+                        }
+                    }
+                }
 
                 if (m_picking_enabled && (!any_gizmo_active || !evt.CmdDown()) && (!m_hover_volume_idxs.empty())) {
                     if (evt.LeftDown() && !m_hover_volume_idxs.empty()) {
@@ -7636,12 +7658,13 @@ void GLCanvas3D::_render_overlays()
                 }
             }
         }
-        /*for (ModelObject* model_object : m_model->objects)
-            for (ModelInstance* model_instance : model_object->instances) {
-                sorted_instances.emplace_back(model_instance);
-            }*/
     }
-    m_labels.render(sorted_instances);
+
+    auto* plater = wxGetApp().plater();
+    const auto& custom_labels = plater->reorder_overlay_labels();
+    if (plater->is_reorder_mode_active())
+        sorted_instances.clear();
+    m_labels.render(sorted_instances, plater->is_reorder_mode_active() ? &custom_labels : nullptr);
 
     _render_3d_navigator();
 }

@@ -2033,18 +2033,22 @@ unsigned int ObjectDataViewModel::GetChildren(const wxDataViewItem &parent, wxDa
 	if (!node)
 	{
         int node_count = 0;
-        for (auto plate : m_plates)
+        for (auto plate : m_plates) {
+            if (m_plate_filter && plate->m_plate_idx != *m_plate_filter)
+                continue;
             array.Add(wxDataViewItem((void*)plate));
-        node_count += m_plates.size();
-        /* FIX: should only return first layer children
-        for (auto object : m_objects) {
-            if (object->GetParent() == nullptr) {
-                array.Add(wxDataViewItem((void*)object));
-                node_count++;
-            }
-        }*/
-        return node_count++;
+            ++node_count;
+        }
+        return node_count;
 	}
+
+    if (m_plate_filter) {
+        ObjectDataViewModelNode* top = node;
+        while (top != nullptr && top->GetType() != itPlate)
+            top = top->GetParent();
+        if (!top || top->m_plate_idx != *m_plate_filter)
+            return 0;
+    }
 
 	if (node->GetChildCount() == 0)
 	{
@@ -2065,16 +2069,28 @@ void ObjectDataViewModel::GetAllChildren(const wxDataViewItem &parent, wxDataVie
 {
 	ObjectDataViewModelNode *node = static_cast<ObjectDataViewModelNode*>(parent.GetID());
 	if (!node) {
-        for (auto plate : m_plates)
+        for (auto plate : m_plates) {
+            if (m_plate_filter && plate->m_plate_idx != *m_plate_filter)
+                continue;
             array.Add(wxDataViewItem((void*)plate));
+        }
 	}
-	else if (node->GetChildCount() == 0)
+	else {
+        if (m_plate_filter) {
+            ObjectDataViewModelNode* top = node;
+            while (top != nullptr && top->GetType() != itPlate)
+                top = top->GetParent();
+            if (!top || top->m_plate_idx != *m_plate_filter)
+                return;
+        }
+        if (node->GetChildCount() == 0)
 		return;
-    else {
+        else {
         const size_t count = node->GetChildren().GetCount();
         for (size_t pos = 0; pos < count; pos++) {
             ObjectDataViewModelNode *child = node->GetChildren().Item(pos);
             array.Add(wxDataViewItem((void*)child));
+        }
         }
     }
 
@@ -2377,6 +2393,14 @@ void ObjectDataViewModel::Rescale()
 
         ItemChanged(item);
     }
+}
+
+void ObjectDataViewModel::SetPlateFilter(std::optional<int> plate_idx)
+{
+    if (m_plate_filter == plate_idx)
+        return;
+    m_plate_filter = plate_idx;
+    Cleared();
 }
 
 void ObjectDataViewModel::AddWarningIcon(const wxDataViewItem& item, const std::string& warning_icon_name)

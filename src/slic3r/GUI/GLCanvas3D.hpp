@@ -417,7 +417,8 @@ class GLCanvas3D
         void enable(bool enable) { m_enabled = enable; }
         void show(bool show) { m_shown = m_enabled ? show : false; }
         bool is_shown() const { return m_shown; }
-        void render(const std::vector<const ModelInstance*>& sorted_instances) const;
+        void render(const std::vector<const ModelInstance*>& sorted_instances,
+                    const std::vector<Plater::ReorderLabel>* custom_labels = nullptr) const;
     };
 
     class Tooltip

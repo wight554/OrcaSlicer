@@ -3,6 +3,7 @@
 
 #include <map>
 #include <vector>
+#include <optional>
 #include <set>
 
 #include <wx/bitmap.h>
@@ -449,6 +450,8 @@ public:
     void on_plate_added(PartPlate* part_plate);
     void on_plate_deleted(int plate_index);
     void reload_all_plates(bool notify_partplate = false);
+    void set_plate_filter(std::optional<int> plate_idx);
+    void clear_plate_filter();
     void on_plate_selected(int plate_index);
     void notify_instance_updated(int obj_idx);
     void object_config_options_changed(const ObjectVolumeID& ov_id);

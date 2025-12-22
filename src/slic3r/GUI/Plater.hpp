@@ -24,6 +24,7 @@
 #include "Jobs/SendJob.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PrintBase.hpp"
+#include "ObjectReorderLabel.hpp"
 
 #include "libslic3r/calib.hpp"
 #include "libslic3r/CutUtils.hpp"
@@ -188,6 +189,10 @@ public:
     void                    update_ui_from_settings();
 	bool                    show_object_list(bool show) const;
     void                    finish_param_edit();
+    void                    toggle_reorder_mode();
+    void                    apply_reorder_changes();
+    void                    update_reorder_apply_state();
+    void                    force_end_reorder_mode();
     void                    auto_calc_flushing_volumes(const int modify_id);
     void                    jump_to_object(ObjectDataViewModelNode* item);
     void                    can_search();
@@ -198,6 +203,11 @@ public:
     std::vector<PlaterPresetComboBox*>&   combos_filament();
     Search::OptionsSearcher&        get_searcher();
     std::string&                    get_search_line();
+
+private:
+    void  auto_calc_flushing_volumes_internal(const int filament_id, const int extruder_id);
+    void  enter_reorder_ui();
+    void  exit_reorder_ui();
 
 private:
     struct priv;
@@ -213,6 +223,7 @@ class Plater: public wxPanel
 {
 public:
     using fs_path = boost::filesystem::path;
+    using ReorderLabel = ObjectReorderLabel;
 
     Plater(wxWindow *parent, MainFrame *main_frame);
     Plater(Plater &&) = delete;
@@ -527,6 +538,14 @@ public:
     int get_publish_finished_event();
 
     void set_current_canvas_as_dirty();
+    bool start_reorder_mode();
+    bool cancel_reorder_mode();
+    bool apply_reorder_mode();
+    bool handle_reorder_pick(int object_idx);
+    bool is_reorder_mode_active() const;
+    size_t reorder_assignment_count() const;
+    int reorder_plate_index() const;
+    const std::vector<ReorderLabel>& reorder_overlay_labels() const;
     void unbind_canvas_event_handlers();
     void reset_canvas_volumes();
 
