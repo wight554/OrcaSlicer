@@ -14993,6 +14993,10 @@ bool Plater::priv::apply_reorder_mode()
 
     update_model_instance_arrange_order();
     partplate_list.reload_all_objects(false, reorder_state->plate_index);
+    if (!indices.empty())
+        q->changed_objects(indices);
+    else
+        q->schedule_background_process();
     q->object_list_changed();
     reorder_state.reset();
     q->set_current_canvas_as_dirty();
