@@ -360,7 +360,7 @@ struct Sidebar::priv
     Search::SearchObjectDialog* dia = nullptr;
     wxPanel* m_object_toolbar = nullptr;
     wxButton* m_btn_reorder = nullptr;
-    wxButton* m_btn_reorder_apply = nullptr;
+    wxButton* m_btn_apply_reorder = nullptr;
     bool      m_reorder_ui_active{ false };
 
     // BBS printer config
@@ -2074,7 +2074,9 @@ void Sidebar::apply_reorder_changes()
     exit_reorder_ui();
     obj_list()->reload_all_plates();
     update_reorder_apply_state();
-    if (wxGetApp().preset_bundle->prints.get_edited_preset().config.print_order != PrintOrder::AsObjectList) {
+    const auto *print_order_opt = wxGetApp().preset_bundle->prints.get_edited_preset().config.option<ConfigOptionEnum<PrintOrder>>("print_order");
+    const bool print_order_matches = print_order_opt && print_order_opt->value == PrintOrder::AsObjectList;
+    if (!print_order_matches) {
         Slic3r::GUI::show_info(this, _L("Set Intra-layer order to \"As object list\" to use the custom ordering."));
     }
 }
@@ -2362,6 +2364,15 @@ struct Plater::priv
     // PIMPL back pointer ("Q-Pointer")
     Plater *q;
     MainFrame *main_frame;
+
+    bool start_reorder_mode();
+    bool cancel_reorder_mode();
+    bool apply_reorder_mode();
+    bool handle_reorder_pick(int object_idx);
+    bool is_reorder_mode_active() const;
+    size_t reorder_assignment_count() const;
+    int reorder_plate_index() const;
+    const std::vector<Plater::ReorderLabel>& reorder_overlay_labels() const;
 
     MenuFactory menus;
 

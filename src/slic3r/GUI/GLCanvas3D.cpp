@@ -704,7 +704,7 @@ GLCanvas3D::Mouse::Mouse()
 }
 
 void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_instances,
-                                const std::vector<Plater::ReorderLabel>* custom_labels) const
+                                const std::vector<ObjectReorderLabel>* custom_labels) const
 {
     if (!m_enabled || !is_shown() || m_canvas.get_gizmos_manager().is_running())
         return;

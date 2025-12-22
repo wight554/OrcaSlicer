@@ -19,6 +19,7 @@
 #include "SceneRaycaster.hpp"
 #include "IMToolbar.hpp"
 #include "slic3r/GUI/3DBed.hpp"
+#include "ObjectReorderLabel.hpp"
 #include "libslic3r/Slicing.hpp"
 
 #include <float.h>
@@ -418,7 +419,7 @@ class GLCanvas3D
         void show(bool show) { m_shown = m_enabled ? show : false; }
         bool is_shown() const { return m_shown; }
         void render(const std::vector<const ModelInstance*>& sorted_instances,
-                    const std::vector<Plater::ReorderLabel>* custom_labels = nullptr) const;
+                    const std::vector<ObjectReorderLabel>* custom_labels = nullptr) const;
     };
 
     class Tooltip
