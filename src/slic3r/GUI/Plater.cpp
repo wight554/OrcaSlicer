@@ -2373,6 +2373,7 @@ struct Plater::priv
     size_t reorder_assignment_count() const;
     int reorder_plate_index() const;
     const std::vector<Plater::ReorderLabel>& reorder_overlay_labels() const;
+    void update_model_instance_arrange_order();
 
     MenuFactory menus;
 
@@ -14990,11 +14991,25 @@ bool Plater::priv::apply_reorder_mode()
     for (size_t i = 0; i < indices.size(); ++i)
         model.objects[indices[i]] = reordered_subseq[i];
 
+    update_model_instance_arrange_order();
     partplate_list.reload_all_objects(false, reorder_state->plate_index);
     q->object_list_changed();
     reorder_state.reset();
     q->set_current_canvas_as_dirty();
     return true;
+}
+
+void Plater::priv::update_model_instance_arrange_order()
+{
+    int order = 1;
+    for (ModelObject* obj : model.objects) {
+        if (!obj)
+            continue;
+        for (ModelInstance* inst : obj->instances) {
+            if (inst)
+                inst->arrange_order = order++;
+        }
+    }
 }
 
 bool Plater::priv::is_reorder_mode_active() const
