@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <vector>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -2373,7 +2374,6 @@ struct Plater::priv
     size_t reorder_assignment_count() const;
     int reorder_plate_index() const;
     const std::vector<Plater::ReorderLabel>& reorder_overlay_labels() const;
-    void update_model_instance_arrange_order();
 
     MenuFactory menus;
 
@@ -14976,44 +14976,65 @@ bool Plater::priv::apply_reorder_mode()
     if (indices.empty())
         return false;
 
-    std::vector<ModelObject*> reordered_subseq;
-    reordered_subseq.reserve(indices.size());
-    reordered_subseq.insert(reordered_subseq.end(), reorder_state->sequence.begin(), reorder_state->sequence.end());
+    std::vector<ModelObject*> desired_order;
+    desired_order.reserve(indices.size());
+    desired_order.insert(desired_order.end(), reorder_state->sequence.begin(), reorder_state->sequence.end());
     for (ModelObject* obj : candidates) {
         if (std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), obj) == reorder_state->sequence.end())
-            reordered_subseq.push_back(obj);
+            desired_order.push_back(obj);
     }
 
-    if (reordered_subseq.size() != indices.size())
-        reordered_subseq.resize(indices.size());
+    if (desired_order.size() != indices.size())
+        desired_order.resize(indices.size());
+
+    std::vector<size_t> sorted_indices = indices;
+    std::sort(sorted_indices.begin(), sorted_indices.end());
+
+    std::unordered_map<ModelObject*, size_t> positions;
+    positions.reserve(model.objects.size());
+    for (size_t i = 0; i < model.objects.size(); ++i)
+        positions[model.objects[i]] = i;
+
+    auto move_object = [&](size_t from_idx, size_t to_idx, std::set<size_t>& touched_indices) {
+        if (from_idx == to_idx)
+            return;
+        int step = (from_idx < to_idx) ? 1 : -1;
+        size_t current = from_idx;
+        while (current != to_idx) {
+            size_t next = static_cast<size_t>(static_cast<long>(current) + step);
+            ModelObject* first = model.objects[current];
+            ModelObject* second = model.objects[next];
+            std::swap(model.objects[current], model.objects[next]);
+            positions[first] = next;
+            positions[second] = current;
+            touched_indices.insert(current);
+            touched_indices.insert(next);
+            current = next;
+        }
+    };
+
+    std::set<size_t> touched_indices;
 
     Plater::TakeSnapshot snapshot(q, "Reorder object list");
-    for (size_t i = 0; i < indices.size(); ++i)
-        model.objects[indices[i]] = reordered_subseq[i];
+    for (size_t i = 0; i < desired_order.size(); ++i) {
+        ModelObject* obj = desired_order[i];
+        size_t target_pos = sorted_indices[i];
+        auto it = positions.find(obj);
+        if (it == positions.end())
+            continue;
+        move_object(it->second, target_pos, touched_indices);
+    }
 
-    update_model_instance_arrange_order();
-    partplate_list.reload_all_objects(false, reorder_state->plate_index);
-    if (!indices.empty())
-        q->changed_objects(indices);
-    else
-        q->schedule_background_process();
+    if (!touched_indices.empty()) {
+        partplate_list.reload_all_objects(false, reorder_state->plate_index);
+        std::vector<size_t> changed_indices(touched_indices.begin(), touched_indices.end());
+        std::sort(changed_indices.begin(), changed_indices.end());
+        q->changed_objects(changed_indices);
+    }
     q->object_list_changed();
     reorder_state.reset();
     q->set_current_canvas_as_dirty();
     return true;
-}
-
-void Plater::priv::update_model_instance_arrange_order()
-{
-    int order = 1;
-    for (ModelObject* obj : model.objects) {
-        if (!obj)
-            continue;
-        for (ModelInstance* inst : obj->instances) {
-            if (inst)
-                inst->arrange_order = order++;
-        }
-    }
 }
 
 bool Plater::priv::is_reorder_mode_active() const
