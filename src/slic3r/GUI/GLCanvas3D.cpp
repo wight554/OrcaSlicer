@@ -776,6 +776,8 @@ void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_
                 it->print_order = std::string((_(L("Sequence"))).ToUTF8()) + "#: " + std::to_string(sorted_instances[i]->arrange_order);
         }
     }
+    const bool reorder_mode = custom_labels != nullptr;
+
     if (custom_labels && !custom_labels->empty()) {
         for (const auto& label : *custom_labels) {
             auto it = std::find_if(owners.begin(), owners.end(), [&label](const Owner& owner) {
@@ -805,6 +807,9 @@ void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_
 
     // render info windows
     for (const Owner& owner : owners) {
+        if (reorder_mode && owner.print_order.empty())
+            continue;
+
         Vec3d screen_box_center = world_to_screen * owner.world_box.center();
         float x = 0.0f;
         float y = 0.0f;
@@ -826,11 +831,14 @@ void GLCanvas3D::Labels::render(const std::vector<const ModelInstance*>& sorted_
         imgui.begin(owner.title, ImGuiWindowFlags_NoMouseInputs | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
         ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
         float win_w = ImGui::GetWindowWidth();
-        ImGui::AlignTextToFramePadding();
-        imgui.text(owner.label);
+        if (!reorder_mode) {
+            ImGui::AlignTextToFramePadding();
+            imgui.text(owner.label);
+        }
 
         if (!owner.print_order.empty()) {
-            ImGui::Separator();
+            if (!reorder_mode)
+                ImGui::Separator();
             float po_len = imgui.calc_text_size(owner.print_order).x;
             ImGui::SetCursorPosX(0.5f * (win_w - po_len));
             ImGui::AlignTextToFramePadding();

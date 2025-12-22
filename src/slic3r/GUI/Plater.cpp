@@ -2363,6 +2363,8 @@ struct ObjectReorderState
     std::vector<ModelObject*> sequence;
     std::unordered_map<ModelObject*, const ModelInstance*> primary_instances;
     std::vector<Plater::ReorderLabel> overlay_labels;
+    bool previous_labels_shown{ false };
+    bool forced_labels{ false };
 
     bool contains(ModelObject* obj) const { return candidates_lookup.find(obj) != candidates_lookup.end(); }
 
@@ -14943,6 +14945,11 @@ bool Plater::priv::start_reorder_mode()
     if (state->ordered_candidates.empty())
         return false;
 
+    state->previous_labels_shown = q->are_view3D_labels_shown();
+    state->forced_labels         = !state->previous_labels_shown;
+    if (state->forced_labels)
+        q->show_view3D_labels(true);
+
     reorder_state = std::move(state);
     q->set_current_canvas_as_dirty();
     return true;
@@ -14952,6 +14959,8 @@ bool Plater::priv::cancel_reorder_mode()
 {
     if (!reorder_state)
         return false;
+    if (reorder_state->forced_labels)
+        q->show_view3D_labels(reorder_state->previous_labels_shown);
     reorder_state.reset();
     q->set_current_canvas_as_dirty();
     return true;
@@ -15054,6 +15063,8 @@ bool Plater::priv::apply_reorder_mode()
         q->changed_objects(changed_indices);
     }
     q->object_list_changed();
+    if (reorder_state->forced_labels)
+        q->show_view3D_labels(reorder_state->previous_labels_shown);
     reorder_state.reset();
     q->set_current_canvas_as_dirty();
     return true;
