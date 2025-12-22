@@ -359,9 +359,10 @@ struct Sidebar::priv
     TextInput* m_search_item = nullptr;
     StaticBox* m_search_bar = nullptr;
     Search::SearchObjectDialog* dia = nullptr;
-    wxPanel* m_object_toolbar = nullptr;
-    wxButton* m_btn_reorder = nullptr;
-    wxButton* m_btn_apply_reorder = nullptr;
+    wxPanel*  m_object_toolbar = nullptr;
+    Label*    m_reorder_label = nullptr;
+    Button*   m_btn_reorder = nullptr;
+    Button*   m_btn_apply_reorder = nullptr;
     bool      m_reorder_ui_active{ false };
 
     // BBS printer config
@@ -1120,9 +1121,13 @@ Sidebar::Sidebar(Plater *parent)
     p->sizer_params->Add(p->m_search_bar, 0, wxALL | wxEXPAND, 0);
     p->m_object_toolbar = new wxPanel(p->scrolled);
     auto toolbar_sizer = new wxBoxSizer(wxHORIZONTAL);
-    toolbar_sizer->AddStretchSpacer();
-    p->m_btn_reorder = new wxButton(p->m_object_toolbar, wxID_ANY, _L("Reorder"));
-    p->m_btn_apply_reorder = new wxButton(p->m_object_toolbar, wxID_ANY, _L("Apply"));
+    p->m_reorder_label = new Label(p->m_object_toolbar, _L("Print order:"));
+    p->m_reorder_label->SetFont(Label::Body_12);
+    toolbar_sizer->Add(p->m_reorder_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
+    p->m_btn_reorder = new Button(p->m_object_toolbar, _L("Reorder"));
+    p->m_btn_reorder->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
+    p->m_btn_apply_reorder = new Button(p->m_object_toolbar, _L("Apply"));
+    p->m_btn_apply_reorder->SetStyle(ButtonStyle::Confirm, ButtonType::Parameter);
     p->m_btn_apply_reorder->Hide();
     toolbar_sizer->Add(p->m_btn_reorder, 0, wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     toolbar_sizer->Add(p->m_btn_apply_reorder, 0);
@@ -2126,6 +2131,8 @@ void Sidebar::update_ui_from_settings()
 bool Sidebar::show_object_list(bool show) const
 {
     p->m_search_bar->Show(show);
+    if (p->m_object_toolbar)
+        p->m_object_toolbar->Show(show);
     if (!p->m_object_list->Show(show))
         return false;
     if (!show)
