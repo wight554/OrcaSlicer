@@ -2256,6 +2256,18 @@ void CreatePrinterPresetDialog::generate_process_presets_data(std::vector<Preset
         else
             BOOST_LOG_TRIVIAL(info) << "process template has no internal_solid_infill_line_width";
 
+        auto bridge_infill_line_width = dynamic_cast<ConfigOptionFloat *>(const_cast<Preset *>(preset)->config.option("bridge_infill_line_width", true));
+        if (bridge_infill_line_width)
+            bridge_infill_line_width->value = nozzle_dia;
+        else
+            BOOST_LOG_TRIVIAL(info) << "process template has no bridge_infill_line_width";
+
+        auto internal_bridge_infill_line_width = dynamic_cast<ConfigOptionFloat *>(const_cast<Preset *>(preset)->config.option("internal_bridge_infill_line_width", true));
+        if (internal_bridge_infill_line_width)
+            internal_bridge_infill_line_width->value = nozzle_dia;
+        else
+            BOOST_LOG_TRIVIAL(info) << "process template has no internal_bridge_infill_line_width";
+
         auto support_line_width = dynamic_cast<ConfigOptionFloat *>(const_cast<Preset *>(preset)->config.option("support_line_width", true));
         if (support_line_width)
             support_line_width->value = nozzle_dia;

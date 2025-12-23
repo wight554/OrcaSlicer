@@ -47,7 +47,7 @@ static inline FlowRole opt_key_to_flow_role(const std::string &opt_key)
         return frExternalPerimeter;
     else if (opt_key == "sparse_infill_line_width")
         return frInfill;
-    else if (opt_key == "internal_solid_infill_line_width")
+    else if (opt_key == "internal_solid_infill_line_width" || opt_key == "bridge_infill_line_width" || opt_key == "internal_bridge_infill_line_width")
         return frSolidInfill;
 	else if (opt_key == "top_surface_line_width")
 		return frTopSolidInfill;

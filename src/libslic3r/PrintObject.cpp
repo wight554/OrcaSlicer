@@ -1124,7 +1124,7 @@ bool PrintObject::invalidate_state_by_config_options(
                 is_approx(new_density->value, 0.) || is_approx(new_density->value, 100.))
                 steps.emplace_back(posPerimeters);
             steps.emplace_back(posPrepareInfill);
-        } else if (opt_key == "internal_solid_infill_line_width") {
+        } else if (opt_key == "internal_solid_infill_line_width" || opt_key == "bridge_infill_line_width" || opt_key == "internal_bridge_infill_line_width") {
             // This value is used for calculating perimeter - infill overlap, thus perimeters need to be recalculated.
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posPrepareInfill);

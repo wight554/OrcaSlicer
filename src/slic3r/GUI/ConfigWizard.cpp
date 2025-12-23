@@ -1402,6 +1402,8 @@ void PageDiameters::apply_custom_config(DynamicPrintConfig &config)
     set_extrusion_width("outer_wall_line_width", 0.45);
     set_extrusion_width("sparse_infill_line_width",			  0.45);
     set_extrusion_width("internal_solid_infill_line_width",       0.45);
+    set_extrusion_width("bridge_infill_line_width",               0.45);
+    set_extrusion_width("internal_bridge_infill_line_width",      0.45);
 }
 
 class SpinCtrlDouble: public wxSpinCtrlDouble

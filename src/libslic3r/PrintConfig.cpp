@@ -4676,6 +4676,30 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
 
+    def = this->add("bridge_infill_line_width", coFloatOrPercent);
+    def->label = L("Bridge infill");
+    def->category = L("Quality");
+    def->tooltip = L("Line width of bridge infill. If expressed as a %, it will be computed over the nozzle diameter. A value of 0 reuses the internal solid infill width.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
+
+    def = this->add("internal_bridge_infill_line_width", coFloatOrPercent);
+    def->label = L("Internal bridge infill");
+    def->category = L("Quality");
+    def->tooltip = L("Line width of internal bridge infill. If expressed as a %, it will be computed over the nozzle diameter. A value of 0 reuses the internal solid infill width.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
+
     def = this->add("internal_solid_infill_speed", coFloat);
     def->label = L("Internal solid infill");
     def->category = L("Speed");
@@ -7521,6 +7545,8 @@ std::map<std::string, std::string> validate(const FullPrintConfig &cfg, bool und
             "inner_wall_line_width",
             "sparse_infill_line_width",
             "internal_solid_infill_line_width",
+            "bridge_infill_line_width",
+            "internal_bridge_infill_line_width",
             "top_surface_line_width",
             "support_line_width",
             "initial_layer_line_width",

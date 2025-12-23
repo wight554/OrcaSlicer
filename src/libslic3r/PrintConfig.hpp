@@ -1031,6 +1031,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat, minimum_sparse_infill_area))
     ((ConfigOptionInt, solid_infill_filament))
     ((ConfigOptionFloatOrPercent, internal_solid_infill_line_width))
+    ((ConfigOptionFloatOrPercent, bridge_infill_line_width))
+    ((ConfigOptionFloatOrPercent, internal_bridge_infill_line_width))
     ((ConfigOptionFloat, internal_solid_infill_speed))
     // Detect thin walls.
     ((ConfigOptionBool, detect_thin_wall))

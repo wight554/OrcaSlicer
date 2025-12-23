@@ -832,6 +832,21 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
             it->second.push_back(exp);
     };
 
+    auto bridge_flow_for_role = [&](const LayerRegion &layerm, FlowRole extrusion_role, bool is_thick_bridge, ExtrusionRole extrusion_role_id) -> Flow {
+        if (!is_thick_bridge && (extrusion_role_id == erBridgeInfill || extrusion_role_id == erInternalBridgeInfill)) {
+            const PrintRegionConfig &region_config = layerm.region().config();
+            const ConfigOptionFloatOrPercent *width_opt =
+                (extrusion_role_id == erBridgeInfill) ? &region_config.bridge_infill_line_width : &region_config.internal_bridge_infill_line_width;
+            if (!width_opt->percent && width_opt->value == 0.)
+                width_opt = &region_config.internal_solid_infill_line_width;
+            const PrintConfig &print_config = layer.object()->print()->config();
+            float nozzle_diameter = float(print_config.nozzle_diameter.get_at(layerm.region().extruder(extrusion_role) - 1));
+            Flow base_flow = Flow::new_from_config_width(extrusion_role, *width_opt, nozzle_diameter, float(layerm.layer()->height));
+            return base_flow.with_flow_ratio(region_config.bridge_flow);
+        }
+        return layerm.bridging_flow(extrusion_role, is_thick_bridge);
+    };
+
 	for (size_t region_id = 0; region_id < layer.regions().size(); ++ region_id) {
 		const LayerRegion  &layerm = *layer.regions()[region_id];
 		region_to_surface_params[region_id].assign(layerm.fill_surfaces.size(), nullptr);
@@ -919,7 +934,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 const bool is_thick_bridge = surface.is_bridge() && (surface.is_internal_bridge() ? object_config.thick_internal_bridges : object_config.thick_bridges);
 				params.flow   = params.bridge ?
 					//Orca: enable thick bridge based on config
-					layerm.bridging_flow(extrusion_role, is_thick_bridge) :
+					bridge_flow_for_role(layerm, extrusion_role, is_thick_bridge, params.extrusion_role) :
 					layerm.flow(extrusion_role, (surface.thickness == -1) ? layer.height : surface.thickness);
 				// record speed params
                 if (!params.bridge) {
