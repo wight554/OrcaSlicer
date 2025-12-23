@@ -8,6 +8,7 @@
 #include <boost/log/trivial.hpp>
 #include <random>
 #include <algorithm>
+#include <cmath>
 #include <queue>
 
 #include "libslic3r/AABBTreeLines.hpp"
@@ -597,6 +598,90 @@ void process_perimeter_polygon(const Polygon &orig_polygon, float z_coord, const
 
 }
 
+struct DistanceNode {
+  float distance;
+  size_t index;
+};
+
+struct DistanceNodeCompare {
+  bool operator()(const DistanceNode &lhs, const DistanceNode &rhs) const {
+    return lhs.distance > rhs.distance;
+  }
+};
+
+void update_overhang_start_distances(PrintObjectSeamData::LayerSeams &layer_seams) {
+  for (Perimeter &perimeter : layer_seams.perimeters) {
+    const size_t start_index = perimeter.start_index;
+    const size_t end_index = perimeter.end_index;
+    if (end_index <= start_index) {
+      continue;
+    }
+    const size_t perimeter_size = end_index - start_index;
+
+    std::vector<bool> is_overhang(perimeter_size, false);
+    std::vector<size_t> overhang_starts;
+    overhang_starts.reserve(perimeter_size);
+
+    for (size_t local_idx = 0; local_idx < perimeter_size; ++local_idx) {
+      SeamCandidate &candidate = layer_seams.points[start_index + local_idx];
+      candidate.distance_to_overhang_start = std::numeric_limits<float>::max();
+      is_overhang[local_idx] = candidate.overhang > 0.0f || candidate.unsupported_dist > 0.0f;
+    }
+
+    for (size_t local_idx = 0; local_idx < perimeter_size; ++local_idx) {
+      size_t prev_local_idx = (local_idx == 0) ? perimeter_size - 1 : local_idx - 1;
+      if (is_overhang[local_idx] && !is_overhang[prev_local_idx]) {
+        overhang_starts.push_back(local_idx);
+      }
+    }
+
+    if (overhang_starts.empty()) {
+      continue;
+    }
+
+    std::vector<float> edge_lengths(perimeter_size, 0.0f);
+    for (size_t local_idx = 0; local_idx < perimeter_size; ++local_idx) {
+      size_t global_idx = start_index + local_idx;
+      size_t next_global_idx = (local_idx + 1 == perimeter_size) ? start_index : global_idx + 1;
+      edge_lengths[local_idx] =
+          (layer_seams.points[global_idx].position.head<2>() - layer_seams.points[next_global_idx].position.head<2>()).norm();
+    }
+
+    std::vector<float> distances(perimeter_size, std::numeric_limits<float>::max());
+    std::priority_queue<DistanceNode, std::vector<DistanceNode>, DistanceNodeCompare> queue;
+    for (size_t local_idx : overhang_starts) {
+      distances[local_idx] = 0.0f;
+      queue.push(DistanceNode { 0.0f, local_idx });
+    }
+
+    while (!queue.empty()) {
+      DistanceNode current = queue.top();
+      queue.pop();
+      if (current.distance > distances[current.index] + 1e-6f) {
+        continue;
+      }
+
+      size_t next_index = (current.index + 1) % perimeter_size;
+      float distance_to_next = current.distance + edge_lengths[current.index];
+      if (distance_to_next + 1e-6f < distances[next_index]) {
+        distances[next_index] = distance_to_next;
+        queue.push(DistanceNode { distance_to_next, next_index });
+      }
+
+      size_t prev_index = (current.index == 0) ? perimeter_size - 1 : current.index - 1;
+      float distance_to_prev = current.distance + edge_lengths[prev_index];
+      if (distance_to_prev + 1e-6f < distances[prev_index]) {
+        distances[prev_index] = distance_to_prev;
+        queue.push(DistanceNode { distance_to_prev, prev_index });
+      }
+    }
+
+    for (size_t local_idx = 0; local_idx < perimeter_size; ++local_idx) {
+      layer_seams.points[start_index + local_idx].distance_to_overhang_start = distances[local_idx];
+    }
+  }
+}
+
 // Get index of previous and next perimeter point of the layer. Because SeamCandidates of all polygons of the given layer
 // are sequentially stored in the vector, each perimeter contains info about start and end index. These vales are used to
 // deduce index of previous and next neigbour in the corresponding perimeter.
@@ -738,10 +823,35 @@ void gather_enforcers_blockers(GlobalModelInfo &result, const PrintObject *po) {
 struct SeamComparator {
   SeamPosition setup;
   float angle_importance;
-  explicit SeamComparator(SeamPosition setup) :
-                                                setup(setup) {
+  float seam_overhang_distance;
+  static constexpr float overhang_start_penalty_scale = 25.0f;
+
+  explicit SeamComparator(SeamPosition setup, float seam_overhang_distance = 0.0f) :
+                                                setup(setup), seam_overhang_distance(seam_overhang_distance) {
     angle_importance =
         setup == spNearest ? SeamPlacer::angle_importance_nearest : SeamPlacer::angle_importance_aligned;
+  }
+
+  bool has_overhang_distance() const {
+    return seam_overhang_distance > 0.0f;
+  }
+
+  bool is_near_overhang_start(const SeamCandidate &candidate) const {
+    return has_overhang_distance()
+           && std::isfinite(candidate.distance_to_overhang_start)
+           && candidate.distance_to_overhang_start < seam_overhang_distance;
+  }
+
+  float overhang_start_penalty(const SeamCandidate &candidate) const {
+    if (!has_overhang_distance() || !std::isfinite(candidate.distance_to_overhang_start)) {
+      return 0.0f;
+    }
+    if (candidate.distance_to_overhang_start >= seam_overhang_distance) {
+      return 0.0f;
+    }
+    const float deficit = seam_overhang_distance - candidate.distance_to_overhang_start;
+    const float normalized = std::clamp(deficit / std::max(0.001f, seam_overhang_distance), 0.0f, 1.0f);
+    return overhang_start_penalty_scale * (1.0f + normalized);
   }
 
   // Standard comparator, must respect the requirements of comparators (e.g. give same result on same inputs) for sorting usage
@@ -755,6 +865,18 @@ struct SeamComparator {
     // Blockers/Enforcers discrimination, top priority
     if (a.type != b.type) {
       return a.type > b.type;
+    }
+
+    if (has_overhang_distance()) {
+      bool near_a = is_near_overhang_start(a);
+      bool near_b = is_near_overhang_start(b);
+      if (near_a != near_b) {
+        return !near_a;
+      }
+      if (near_a && near_b
+          && std::abs(a.distance_to_overhang_start - b.distance_to_overhang_start) > 1e-3f) {
+        return a.distance_to_overhang_start > b.distance_to_overhang_start;
+      }
     }
 
     //avoid overhangs
@@ -784,10 +906,10 @@ struct SeamComparator {
     // the penalites are kept close to range [0-1.x] however, it should not be relied upon
     float penalty_a = a.overhang + a.visibility +
                       angle_importance * compute_angle_penalty(a.local_ccw_angle)
-                      + distance_penalty_a;
+                      + distance_penalty_a + overhang_start_penalty(a);
     float penalty_b = b.overhang + b.visibility +
                       angle_importance * compute_angle_penalty(b.local_ccw_angle)
-                      + distance_penalty_b;
+                      + distance_penalty_b + overhang_start_penalty(b);
 
     return penalty_a < penalty_b;
   }
@@ -814,6 +936,18 @@ struct SeamComparator {
       return a.type > b.type;
     }
 
+    if (has_overhang_distance()) {
+      bool near_a = is_near_overhang_start(a);
+      bool near_b = is_near_overhang_start(b);
+      if (near_a != near_b) {
+        return !near_a;
+      }
+      if (near_a && near_b
+          && std::abs(a.distance_to_overhang_start - b.distance_to_overhang_start) > 1e-3f) {
+        return a.distance_to_overhang_start > b.distance_to_overhang_start;
+      }
+    }
+
     //avoid overhangs
     if ((a.overhang > 0.0f || b.overhang > 0.0f)
         && abs(a.overhang - b.overhang) > (0.1f * a.perimeter.flow_width)) {
@@ -837,9 +971,9 @@ struct SeamComparator {
     }
 
     float penalty_a = a.overhang + a.visibility
-                      + angle_importance * compute_angle_penalty(a.local_ccw_angle);
+                      + angle_importance * compute_angle_penalty(a.local_ccw_angle) + overhang_start_penalty(a);
     float penalty_b = b.overhang + b.visibility +
-                      angle_importance * compute_angle_penalty(b.local_ccw_angle);
+                      angle_importance * compute_angle_penalty(b.local_ccw_angle) + overhang_start_penalty(b);
 
     return penalty_a <= penalty_b || penalty_a - penalty_b < SeamPlacer::seam_align_score_tolerance;
   }
@@ -924,9 +1058,9 @@ void pick_seam_point(std::vector<SeamCandidate> &perimeter_points, size_t start_
 }
 
 size_t pick_nearest_seam_point_index(const std::vector<SeamCandidate> &perimeter_points, size_t start_index,
-                                     const Vec2f &preffered_location) {
+                                     const Vec2f &preffered_location, float seam_overhang_distance) {
   size_t end_index = perimeter_points[start_index].perimeter.end_index;
-  SeamComparator comparator { spNearest };
+  SeamComparator comparator { spNearest, seam_overhang_distance };
 
   size_t seam_index = start_index;
   for (size_t index = start_index; index < end_index; ++index) {
@@ -938,8 +1072,8 @@ size_t pick_nearest_seam_point_index(const std::vector<SeamCandidate> &perimeter
 }
 
 // picks random seam point uniformly, respecting enforcers blockers and overhang avoidance.
-void pick_random_seam_point(const std::vector<SeamCandidate> &perimeter_points, size_t start_index) {
-  SeamComparator comparator { spRandom };
+void pick_random_seam_point(const std::vector<SeamCandidate> &perimeter_points, size_t start_index, float seam_overhang_distance) {
+  SeamComparator comparator { spRandom, seam_overhang_distance };
 
   // algorithm keeps a list of viable points and their lengths. If it finds a point
   // that is much better than the viable_example_index (e.g. better type, no overhang; see is_first_not_much_worse)
@@ -1093,6 +1227,8 @@ void SeamPlacer::calculate_overhangs_and_layer_embedding(const PrintObject *po) 
                                                                 + 0.65f * perimeter_point.perimeter.flow_width;
                           }
                         }
+
+                        update_overhang_start_distances(layer_seams);
 
                         prev_layer_distancer.swap(current_layer_distancer);
                       }
@@ -1427,7 +1563,8 @@ void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_can
   for (const PrintObject *po : print.objects()) {
     throw_if_canceled_func();
     SeamPosition configured_seam_preference = po->config().seam_position.value;
-    SeamComparator comparator { configured_seam_preference };
+    const float seam_overhang_distance = float(po->config().seam_to_overhang_distance);
+    SeamComparator comparator { configured_seam_preference, seam_overhang_distance };
 
     {
       GlobalModelInfo global_model_info { };
@@ -1464,13 +1601,13 @@ void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_can
       //pick seam point
       std::vector<PrintObjectSeamData::LayerSeams> &layers = m_seam_per_object[po].layers;
       tbb::parallel_for(tbb::blocked_range<size_t>(0, layers.size()),
-                        [&layers, configured_seam_preference, comparator](tbb::blocked_range<size_t> r) {
+                        [&layers, configured_seam_preference, comparator, seam_overhang_distance](tbb::blocked_range<size_t> r) {
                           for (size_t layer_idx = r.begin(); layer_idx < r.end(); ++layer_idx) {
                             std::vector<SeamCandidate> &layer_perimeter_points = layers[layer_idx].points;
                             for (size_t current = 0; current < layer_perimeter_points.size();
                                  current = layer_perimeter_points[current].perimeter.end_index)
                               if (configured_seam_preference == spRandom)
-                                pick_random_seam_point(layer_perimeter_points, current);
+                                pick_random_seam_point(layer_perimeter_points, current, seam_overhang_distance);
                               else
                                 pick_seam_point(layer_perimeter_points, current, comparator);
                           }
@@ -1514,6 +1651,7 @@ void SeamPlacer::place_seam(const Layer *layer, ExtrusionLoop &loop,
     return current;
   };
 
+  const float seam_overhang_distance = float(po->config().seam_to_overhang_distance);
   const PrintObjectSeamData::LayerSeams &layer_perimeters =
       m_seam_per_object.find(layer->object())->second.layers[layer_index];
 
@@ -1550,7 +1688,7 @@ void SeamPlacer::place_seam(const Layer *layer, ExtrusionLoop &loop,
     seam_index =
         po->config().seam_position == spNearest ?
                                                 pick_nearest_seam_point_index(layer_perimeters.points, perimeter.start_index,
-                                                                              unscaled<float>(last_pos)) :
+                                                                              unscaled<float>(last_pos), seam_overhang_distance) :
                                                 perimeter.seam_index;
     seam_position = layer_perimeters.points[seam_index].position;
   }

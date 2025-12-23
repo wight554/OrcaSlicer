@@ -1124,6 +1124,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("seam_to_overhang_distance", coFloat);
+    def->label = L("Seam to overhang distance");
+    def->category = L("Quality");
+    def->tooltip = L("Keep seam start at least this distance away from the beginning of an overhang or bridge whenever possible. "
+                     "Set to 0 to disable this safeguard.");
+    def->sidetext = "mm";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
     def = this->add("overhang_reverse", coBool);
     def->label = L("Reverse on even");
     def->full_label = L("Overhang reversal");
@@ -6991,6 +7001,12 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
 // Don't convert single options here, implement such conversion in PrintConfigDef::handle_legacy() instead.
 void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
 {
+    if (!config.has("seam_to_overhang_distance")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("seam_to_overhang_distance");
+        if (default_opt != nullptr)
+            config.set_key_value("seam_to_overhang_distance", default_opt->clone());
+    }
+
     if (config.has("thumbnails")) {
         std::string extention;
         if (config.has("thumbnails_format")) {

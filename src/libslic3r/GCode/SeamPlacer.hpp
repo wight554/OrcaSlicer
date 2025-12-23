@@ -59,8 +59,9 @@ struct SeamCandidate {
   SeamCandidate(const Vec3f &pos, Perimeter &perimeter,
                 float local_ccw_angle,
                 EnforcedBlockedSeamPoint type) :
-                                                 position(pos), perimeter(perimeter), visibility(0.0f), overhang(0.0f), embedded_distance(0.0f), local_ccw_angle(
-                                                                                                                                                     local_ccw_angle), type(type), central_enforcer(false) {
+                                                 position(pos), perimeter(perimeter), visibility(0.0f), overhang(0.0f), unsupported_dist(0.0f), embedded_distance(0.0f), local_ccw_angle(
+                                                                                                                                                     local_ccw_angle), type(type), central_enforcer(false),
+                                                 distance_to_overhang_start(std::numeric_limits<float>::max()) {
   }
   const Vec3f position;
   // pointer to Perimeter loop of this point. It is shared across all points of the loop
@@ -68,6 +69,8 @@ struct SeamCandidate {
   float visibility;
   float overhang;
   float unsupported_dist;
+  // Along-perimeter distance to the closest overhang/bridge start; std::numeric_limits<float>::max() when not applicable.
+  float distance_to_overhang_start;
   // distance inside the merged layer regions, for detecting perimeter points which are hidden indside the print (e.g. multimaterial join)
   // Negative sign means inside the print, comes from EdgeGrid structure
   float embedded_distance;
