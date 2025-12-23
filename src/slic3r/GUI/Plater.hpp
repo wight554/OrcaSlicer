@@ -191,6 +191,7 @@ public:
     void                    finish_param_edit();
     void                    toggle_reorder_mode();
     void                    apply_reorder_changes();
+    void                    clear_reorder_numbers();
     void                    update_reorder_apply_state();
     void                    force_end_reorder_mode();
     void                    auto_calc_flushing_volumes(const int modify_id);
@@ -406,6 +407,7 @@ public:
     void increase_instances(size_t num = 1);
     void decrease_instances(size_t num = 1);
     void set_number_of_copies(/*size_t num*/);
+    void fill_bed_with_copies();
     void fill_bed_with_instances();
     bool is_selection_empty() const;
     void scale_selection_to_fit_print_volume();
@@ -541,11 +543,13 @@ public:
     bool start_reorder_mode();
     bool cancel_reorder_mode();
     bool apply_reorder_mode();
-    bool handle_reorder_pick(int object_idx);
+    bool clear_reorder_assignments();
+    bool handle_reorder_pick(int object_idx, int instance_idx);
     bool is_reorder_mode_active() const;
     size_t reorder_assignment_count() const;
     int reorder_plate_index() const;
     const std::vector<ReorderLabel>& reorder_overlay_labels() const;
+    void ensure_custom_print_order_mode();
     void unbind_canvas_event_handlers();
     void reset_canvas_volumes();
 

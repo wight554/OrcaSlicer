@@ -19,6 +19,7 @@
 #include "TextConfiguration.hpp"
 #include "EmbossShape.hpp"
 #include "TriangleSelector.hpp"
+#include <cereal/cereal.hpp>
 
 //BBS: add bbs 3mf
 #include "Format/bbs_3mf.hpp"
@@ -36,10 +37,12 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <type_traits>
 
 namespace cereal {
 	class BinaryInputArchive;
 	class BinaryOutputArchive;
+    class Exception;
 	template <class T> void load_optional(BinaryInputArchive &ar, std::shared_ptr<const T> &ptr);
 	template <class T> void save_optional(BinaryOutputArchive &ar, const std::shared_ptr<const T> &ptr);
 	template <class T> void load_by_value(BinaryInputArchive &ar, T &obj);
@@ -373,6 +376,7 @@ public:
     LayerHeightProfile      layer_height_profile;
     // Whether or not this object is printable
     bool                    printable { true };
+    int                     print_order { 0 };
 
     // This vector holds position of selected support points for SLA. The data are
     // saved in mesh coordinates to allow using them for several instances.
@@ -674,34 +678,42 @@ private:
         assert(this->config.id().invalid());
         assert(this->layer_height_profile.id().invalid());
 	}
-    template<class Archive> void save(Archive& ar) const {
+    template<class Archive> void serialize(Archive& ar) {
         ar(cereal::base_class<ObjectBase>(this));
-        Internal::StaticSerializationWrapper<ModelConfigObject const> config_wrapper(config);
-        Internal::StaticSerializationWrapper<LayerHeightProfile const> layer_heigth_profile_wrapper(layer_height_profile);
-        ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
-            sla_support_points, sla_points_status, sla_drain_holes, printable, origin_translation, brim_points,
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
+            Internal::StaticSerializationWrapper<ModelConfigObject> config_wrapper(config);
+            Internal::StaticSerializationWrapper<LayerHeightProfile> layer_heigth_profile_wrapper(layer_height_profile);
+            // BBS: add backup, check modify
+            SaveObjectGaurd gaurd(*this);
+            ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
+                sla_support_points, sla_points_status, sla_drain_holes, printable);
+        } else {
+            Internal::StaticSerializationWrapper<ModelConfigObject const> config_wrapper(config);
+            Internal::StaticSerializationWrapper<LayerHeightProfile const> layer_heigth_profile_wrapper(layer_height_profile);
+            ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
+                sla_support_points, sla_points_status, sla_drain_holes, printable);
+        }
+        ar(origin_translation, brim_points,
             m_bounding_box_approx, m_bounding_box_approx_valid, 
             m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
             m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
             cut_connectors, cut_id);
-    }
-    template<class Archive> void load(Archive& ar) {
-        ar(cereal::base_class<ObjectBase>(this));
-        Internal::StaticSerializationWrapper<ModelConfigObject> config_wrapper(config);
-        Internal::StaticSerializationWrapper<LayerHeightProfile> layer_heigth_profile_wrapper(layer_height_profile);
-        // BBS: add backup, check modify
-        SaveObjectGaurd gaurd(*this);
-        ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
-            sla_support_points, sla_points_status, sla_drain_holes, printable, origin_translation, brim_points,
-            m_bounding_box_approx, m_bounding_box_approx_valid, 
-            m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
-            m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
-            cut_connectors, cut_id);
-        std::vector<ObjectID> volume_ids2;
-        std::transform(volumes.begin(), volumes.end(), std::back_inserter(volume_ids2), std::mem_fn(&ObjectBase::id));
-        if (volume_ids != volume_ids2)
-            Slic3r::save_object_mesh(*this);
-        volume_ids.clear();
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
+            std::vector<ObjectID> volume_ids2;
+            std::transform(volumes.begin(), volumes.end(), std::back_inserter(volume_ids2), std::mem_fn(&ObjectBase::id));
+            if (volume_ids != volume_ids2)
+                Slic3r::save_object_mesh(*this);
+            volume_ids.clear();
+        }
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
+            try {
+                ar(print_order);
+            } catch (const cereal::Exception&) {
+                print_order = 0;
+            }
+        } else {
+            ar(print_order);
+        }
     }
 
     // Called by Print::validate() from the UI thread.
@@ -1248,6 +1260,7 @@ public:
     bool printable;
     bool use_loaded_id_for_label {false};
     int arrange_order = 0; // BBS
+    int print_order = 0;
     size_t loaded_id = 0; // BBS
 
     size_t get_labeled_id() const
@@ -1396,6 +1409,15 @@ private:
     // BBS. Add added members to archive.
     template<class Archive> void serialize(Archive& ar) {
         ar(m_transformation, print_volume_state, printable, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized);
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
+            try {
+                ar(print_order);
+            } catch (const cereal::Exception&) {
+                print_order = 0;
+            }
+        } else {
+            ar(print_order);
+        }
     }
 };
 
@@ -1682,6 +1704,8 @@ public:
     bool          is_mm_painted() const;
     // Checks if any of objects is painted using the fuzzy skin painting gizmo.
     bool          is_fuzzy_skin_painted() const;
+    bool          has_custom_instance_order() const;
+
 
     std::unique_ptr<CalibPressureAdvancePattern> calib_pa_pattern;
 
@@ -1768,7 +1792,7 @@ namespace cereal
     template <class Archive> struct specialize<Archive, Slic3r::ModelVolume, cereal::specialization::member_load_save> {};
     // BBS: backup
     template <class Archive> struct specialize<Archive, Slic3r::Model, cereal::specialization::member_load_save> {};
-    template <class Archive> struct specialize<Archive, Slic3r::ModelObject, cereal::specialization::member_load_save> {};
+    template <class Archive> struct specialize<Archive, Slic3r::ModelObject, cereal::specialization::member_serialize> {};
     template <class Archive> struct specialize<Archive, Slic3r::ModelConfigObject, cereal::specialization::member_serialize> {};
 }
 

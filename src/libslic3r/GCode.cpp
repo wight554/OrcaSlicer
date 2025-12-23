@@ -1798,6 +1798,55 @@ std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Pri
     return instances;
 }
 
+std::vector<const PrintInstance*> sort_object_instances_by_custom_order(const Print& print)
+{
+    struct Entry
+    {
+        const ModelInstance* model_instance;
+        const PrintInstance* print_instance;
+        size_t               insertion_index;
+    };
+
+    std::vector<Entry> entries;
+    entries.reserve(print.num_object_instances());
+
+    size_t index = 0;
+    for (const PrintObject* print_object : print.objects()) {
+        for (const PrintInstance& print_instance : print_object->instances()) {
+            entries.push_back(Entry{ print_instance.model_instance, &print_instance, index++ });
+        }
+    }
+
+    auto has_custom_order = [](const Entry& entry) -> bool {
+        return entry.model_instance != nullptr && entry.model_instance->print_order > 0;
+    };
+
+    std::stable_sort(entries.begin(), entries.end(), [&](const Entry& lhs, const Entry& rhs) {
+        const bool lhs_has = has_custom_order(lhs);
+        const bool rhs_has = has_custom_order(rhs);
+        if (lhs_has && rhs_has) {
+            const int lhs_order = lhs.model_instance->print_order;
+            const int rhs_order = rhs.model_instance->print_order;
+            if (lhs_order != rhs_order)
+                return lhs_order < rhs_order;
+        } else if (lhs_has != rhs_has) {
+            return lhs_has && !rhs_has;
+        }
+        return lhs.insertion_index < rhs.insertion_index;
+    });
+
+    std::vector<const PrintInstance*> result;
+    result.reserve(entries.size());
+    size_t arranged_order = 1;
+    for (const Entry& entry : entries) {
+        if (entry.model_instance != nullptr)
+            const_cast<ModelInstance*>(entry.model_instance)->arrange_order = arranged_order;
+        ++arranged_order;
+        result.emplace_back(entry.print_instance);
+    }
+    return result;
+}
+
 enum BambuBedType {
     bbtUnknown = 0,
     bbtCoolPlate = 1,
@@ -2144,11 +2193,13 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         // In non-sequential print, the printing extruders may have been modified by the extruder switches stored in Model::custom_gcode_per_print_z.
         // Therefore initialize the printing extruders from there.
         this->set_extruders(tool_ordering.all_extruders());
-        print_object_instances_ordering = 
-            // By default, order object instances using a nearest neighbor search.
-            print.config().print_order == PrintOrder::Default ? chain_print_object_instances(print)
-            // Otherwise same order as the object list
-            : sort_object_instances_by_model_order(print);
+        const bool use_custom_instance_order = print.config().print_order == PrintOrder::CustomOrdering;
+        if (use_custom_instance_order)
+            print_object_instances_ordering = sort_object_instances_by_custom_order(print);
+        else if (print.config().print_order == PrintOrder::AsObjectList)
+            print_object_instances_ordering = sort_object_instances_by_model_order(print, true);
+        else
+            print_object_instances_ordering = chain_print_object_instances(print);
     }
     if (initial_extruder_id == (unsigned int)-1) {
         // Nothing to print!

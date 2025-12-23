@@ -1412,6 +1412,20 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                     (*old_instance)->printable 		    = (*new_instance)->printable;
   				}
 	        }
+            const bool instances_match_ids = model_object.instances.size() == model_object_new.instances.size() &&
+                std::equal(model_object.instances.begin(), model_object.instances.end(), model_object_new.instances.begin(),
+                    [](auto l, auto r) { return l->id() == r->id(); });
+            if (instances_match_ids &&
+                ! std::equal(model_object.instances.begin(), model_object.instances.end(), model_object_new.instances.begin(),
+                    [](auto l, auto r) { return l->arrange_order == r->arrange_order && l->print_order == r->print_order; })) {
+                update_apply_status(this->invalidate_step(psGCodeExport));
+                auto new_instance = model_object_new.instances.begin();
+                for (ModelInstance* old_instance : model_object.instances) {
+                    old_instance->arrange_order = (*new_instance)->arrange_order;
+                    old_instance->print_order   = (*new_instance)->print_order;
+                    ++new_instance;
+                }
+            }
 
         }
     }

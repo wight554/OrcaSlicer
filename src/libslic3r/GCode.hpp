@@ -638,6 +638,7 @@ private:
 };
 
 std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Print& print, bool init_order = false);
+std::vector<const PrintInstance*> sort_object_instances_by_custom_order(const Print& print);
 
 }
 

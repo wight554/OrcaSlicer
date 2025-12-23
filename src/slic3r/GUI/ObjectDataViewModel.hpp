@@ -39,6 +39,7 @@ enum ItemType {
 enum ColumnNumber
 {
     colName         = 0,    // item name
+    colPrintOrder      ,    // custom print order indicator
     colPrint           ,    // printable property
     colFilament        ,    // extruder selection
     // BBS

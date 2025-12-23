@@ -39,6 +39,7 @@
 #include <wx/busyinfo.h>
 #include <wx/event.h>
 #include <wx/wrapsizer.h>
+#include <wx/spinctrl.h>
 #ifdef _WIN32
 #include <wx/richtooltip.h>
 #include <wx/custombgwin.h>
@@ -46,6 +47,7 @@
 #endif
 #include <wx/clrpicker.h>
 #include <wx/tokenzr.h>
+#include <wx/settings.h>
 #include <wx/aui/aui.h>
 
 #include "libslic3r/libslic3r.h"
@@ -133,6 +135,8 @@
 #include "RenamedProfilesDialog.hpp"
 #include "libslic3r/PresetRenameHistory.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/DialogButtons.hpp"
+#include "Widgets/SpinInput.hpp"
 
 #include "GUI_ObjectTable.hpp"
 #include "libslic3r/Thread.hpp"
@@ -365,6 +369,7 @@ struct Sidebar::priv
     Label*    m_reorder_label = nullptr;
     Button*   m_btn_reorder = nullptr;
     Button*   m_btn_apply_reorder = nullptr;
+    Button*   m_btn_clear_reorder = nullptr;
     bool      m_reorder_ui_active{ false };
 
     // BBS printer config
@@ -1131,6 +1136,7 @@ Sidebar::Sidebar(Plater *parent)
     wxGetApp().UpdateDarkUI(p->m_reorder_label);
     toolbar_sizer->Add(p->m_reorder_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     p->m_btn_reorder = new Button(p->m_object_toolbar, _L("Reorder"));
+    p->m_btn_clear_reorder = new Button(p->m_object_toolbar, _L("Clear"));
     p->m_btn_apply_reorder = new Button(p->m_object_toolbar, _L("Apply"));
     auto configure_toolbar_button = [this](Button* btn, ButtonStyle style) {
         if (!btn)
@@ -1143,12 +1149,16 @@ Sidebar::Sidebar(Plater *parent)
         wxGetApp().UpdateDarkUI(btn);
     };
     configure_toolbar_button(p->m_btn_reorder, ButtonStyle::Regular);
+    configure_toolbar_button(p->m_btn_clear_reorder, ButtonStyle::Regular);
     configure_toolbar_button(p->m_btn_apply_reorder, ButtonStyle::Confirm);
     p->m_btn_apply_reorder->Hide();
+    p->m_btn_clear_reorder->Hide();
     toolbar_sizer->Add(p->m_btn_reorder, 0, wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
+    toolbar_sizer->Add(p->m_btn_clear_reorder, 0, wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     toolbar_sizer->Add(p->m_btn_apply_reorder, 0);
     p->m_object_toolbar->SetSizer(toolbar_sizer);
     p->m_btn_reorder->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { toggle_reorder_mode(); });
+    p->m_btn_clear_reorder->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { clear_reorder_numbers(); });
     p->m_btn_apply_reorder->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { apply_reorder_changes(); });
     p->sizer_params->Add(p->m_object_toolbar, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(SidebarProps::ElementSpacing()));
     p->sizer_params->Add(p->m_object_list, 1, wxEXPAND | wxTOP, 0);
@@ -2049,6 +2059,8 @@ void Sidebar::enter_reorder_ui()
         p->m_btn_reorder->SetLabel(_L("Cancel"));
     if (p->m_btn_apply_reorder)
         p->m_btn_apply_reorder->Show();
+    if (p->m_btn_clear_reorder)
+        p->m_btn_clear_reorder->Show();
     obj_list()->set_plate_filter(wxGetApp().plater()->reorder_plate_index());
     update_reorder_apply_state();
     p->sizer_params->Layout();
@@ -2063,6 +2075,8 @@ void Sidebar::exit_reorder_ui()
         p->m_btn_reorder->SetLabel(_L("Reorder"));
     if (p->m_btn_apply_reorder)
         p->m_btn_apply_reorder->Hide();
+    if (p->m_btn_clear_reorder)
+        p->m_btn_clear_reorder->Hide();
     obj_list()->clear_plate_filter();
     update_reorder_apply_state();
     p->sizer_params->Layout();
@@ -2097,11 +2111,14 @@ void Sidebar::apply_reorder_changes()
     exit_reorder_ui();
     obj_list()->reload_all_plates();
     update_reorder_apply_state();
-    const auto *print_order_opt = wxGetApp().preset_bundle->prints.get_edited_preset().config.option<ConfigOptionEnum<PrintOrder>>("print_order");
-    const bool print_order_matches = print_order_opt && print_order_opt->value == PrintOrder::AsObjectList;
-    if (!print_order_matches) {
-        Slic3r::GUI::show_info(this, _L("Set Intra-layer order to \"As object list\" to use the custom ordering."));
-    }
+}
+
+void Sidebar::clear_reorder_numbers()
+{
+    Plater* plater = wxGetApp().plater();
+    if (!plater || !plater->is_reorder_mode_active())
+        return;
+    plater->clear_reorder_assignments();
 }
 
 void Sidebar::update_reorder_apply_state()
@@ -2143,6 +2160,8 @@ void Sidebar::update_ui_from_settings()
 #if 0
     p->object_list->apply_volumes_order();
 #endif
+    if (p->m_object_list != nullptr)
+        p->m_object_list->update_print_order_column_visibility();
 }
 
 bool Sidebar::show_object_list(bool show) const
@@ -2358,30 +2377,49 @@ public:
 // Plater / private
 struct ObjectReorderState
 {
+    struct InstanceCandidate
+    {
+        ModelObject*   object { nullptr };
+        ModelInstance* instance { nullptr };
+        size_t         object_index { 0 };
+        size_t         instance_index { 0 };
+    };
+
     int plate_index{ -1 };
-    std::vector<ModelObject*> ordered_candidates;
-    std::unordered_set<ModelObject*> candidates_lookup;
-    std::unordered_map<ModelObject*, size_t> assigned_order;
-    std::vector<ModelObject*> sequence;
-    std::unordered_map<ModelObject*, const ModelInstance*> primary_instances;
+    std::vector<InstanceCandidate> ordered_candidates;
+    std::unordered_set<ModelInstance*> candidates_lookup;
+    std::unordered_map<ModelInstance*, size_t> assigned_order;
+    std::vector<ModelInstance*> sequence;
     std::vector<Plater::ReorderLabel> overlay_labels;
     bool previous_labels_shown{ false };
     bool forced_labels{ false };
 
-    bool contains(ModelObject* obj) const { return candidates_lookup.find(obj) != candidates_lookup.end(); }
+    bool contains(ModelInstance* inst) const { return candidates_lookup.find(inst) != candidates_lookup.end(); }
 
     void refresh_overlay_labels()
     {
         overlay_labels.clear();
         assigned_order.clear();
-        overlay_labels.reserve(sequence.size());
-        for (size_t idx = 0; idx < sequence.size(); ++idx) {
-            ModelObject* obj = sequence[idx];
-            assigned_order[obj] = idx + 1;
-            auto it_inst = primary_instances.find(obj);
-            if (it_inst == primary_instances.end() || it_inst->second == nullptr)
+        size_t next_value = 1;
+        for (ModelInstance* inst : sequence) {
+            if (inst == nullptr)
                 continue;
-            overlay_labels.push_back(Plater::ReorderLabel { it_inst->second->id().id, std::to_string(idx + 1) });
+            assigned_order[inst] = next_value++;
+        }
+        overlay_labels.reserve(ordered_candidates.size());
+        for (const auto& candidate : ordered_candidates) {
+            ModelInstance* inst = candidate.instance;
+            if (inst == nullptr)
+                continue;
+            auto it = assigned_order.find(inst);
+            std::string label_text;
+            if (it != assigned_order.end())
+                label_text = std::to_string(it->second);
+            else if (inst->print_order > 0)
+                label_text = std::to_string(inst->print_order);
+            else
+                label_text.clear();
+            overlay_labels.push_back(Plater::ReorderLabel { inst->id().id, label_text });
         }
     }
 };
@@ -2395,7 +2433,8 @@ struct Plater::priv
     bool start_reorder_mode();
     bool cancel_reorder_mode();
     bool apply_reorder_mode();
-    bool handle_reorder_pick(int object_idx);
+    bool clear_reorder_assignments();
+    bool handle_reorder_pick(int object_idx, int instance_idx);
     bool is_reorder_mode_active() const;
     size_t reorder_assignment_count() const;
     int reorder_plate_index() const;
@@ -11548,6 +11587,19 @@ void Plater::update(bool conside_update_flag, bool force_background_processing_u
 
 void Plater::object_list_changed() { p->object_list_changed(); }
 
+void Plater::ensure_custom_print_order_mode()
+{
+    auto &print_preset = wxGetApp().preset_bundle->prints.get_edited_preset();
+    if (auto *opt = print_preset.config.option<ConfigOptionEnum<PrintOrder>>("print_order");
+        opt != nullptr && opt->value == PrintOrder::CustomOrdering)
+        return;
+
+    print_preset.config.set_key_value("print_order", new ConfigOptionEnum<PrintOrder>(PrintOrder::CustomOrdering));
+    print_preset.set_dirty();
+
+    if (auto *print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
+        print_tab->update();
+}
 Worker &Plater::get_ui_job_worker() { return p->m_worker; }
 
 const Worker &Plater::get_ui_job_worker() const { return p->m_worker; }
@@ -11692,8 +11744,6 @@ void Plater::remove_selected()
 
 void Plater::increase_instances(size_t num)
 {
-    // BBS
-#if 0
     if (! can_increase_instances()) { return; }
 
     Plater::TakeSnapshot snapshot(this, "Increase Instances");
@@ -11726,13 +11776,14 @@ void Plater::increase_instances(size_t num)
 
     p->selection_changed();
     this->p->schedule_background_process();
-#endif
+    if (wxGetApp().app_config->get("auto_arrange") == "true") {
+        this->set_prepare_state(Job::PREPARE_STATE_MENU);
+        this->arrange();
+    }
 }
 
 void Plater::decrease_instances(size_t num)
 {
-    // BBS
-#if 0
     if (! can_decrease_instances()) { return; }
 
     Plater::TakeSnapshot snapshot(this, "Decrease Instances");
@@ -11756,8 +11807,77 @@ void Plater::decrease_instances(size_t num)
 
     p->selection_changed();
     this->p->schedule_background_process();
-#endif
+    if (wxGetApp().app_config->get("auto_arrange") == "true") {
+        this->set_prepare_state(Job::PREPARE_STATE_MENU);
+        this->arrange();
+    }
 }
+
+namespace {
+
+class CopiesCountDialog : public DPIDialog
+{
+public:
+    CopiesCountDialog(wxWindow* parent,
+                      const wxString& message,
+                      const wxString& prompt,
+                      const wxString& title,
+                      long value,
+                      long min,
+                      long max)
+        : DPIDialog(parent ? parent : static_cast<wxWindow *>(wxGetApp().mainframe),
+                    wxID_ANY, title, wxDefaultPosition, wxDefaultSize,
+                    wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+    {
+        const int padding = FromDIP(10);
+        const wxColour base_bg = StateColor::darkModeColorFor(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        SetBackgroundColour(base_bg);
+        SetOwnBackgroundColour(base_bg);
+
+        wxBoxSizer* top_sizer = new wxBoxSizer(wxVERTICAL);
+
+        if (!message.empty()) {
+            auto* message_label = new wxStaticText(this, wxID_ANY, message);
+            message_label->SetBackgroundColour(base_bg);
+            top_sizer->Add(message_label, 0, wxEXPAND | wxALL, padding);
+        }
+
+        auto* prompt_label = new wxStaticText(this, wxID_ANY, prompt);
+        prompt_label->SetBackgroundColour(base_bg);
+        top_sizer->Add(prompt_label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
+
+        const long clamped_value = std::clamp(value, min, max);
+        m_spinner = new SpinInput(this, wxEmptyString, "", wxDefaultPosition,
+                                  wxSize(FromDIP(160), -1), wxSP_ARROW_KEYS,
+                                  static_cast<int>(min), static_cast<int>(max),
+                                  static_cast<int>(clamped_value));
+        m_spinner->SetCornerRadius(FromDIP(6));
+        top_sizer->Add(m_spinner, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
+
+        auto* buttons = new DialogButtons(this, {"OK", "Cancel"});
+        buttons->GetOK()->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_OK); });
+        buttons->GetCANCEL()->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+        top_sizer->Add(buttons, 0, wxEXPAND | wxALL, padding);
+
+        SetSizerAndFit(top_sizer);
+        CentreOnParent();
+
+        wxGetApp().UpdateDlgDarkUI(this);
+        if (auto* text = m_spinner->GetTextCtrl()) {
+            text->SetFocus();
+            text->SelectAll();
+        }
+    }
+
+    long GetValue() const { return static_cast<long>(m_spinner->GetValue()); }
+
+    void on_dpi_changed(const wxRect& suggested_rect) override {}
+
+private:
+    SpinInput* m_spinner { nullptr };
+};
+
+} // namespace
 
 static long GetNumberFromUser(  const wxString& msg,
                                 const wxString& prompt,
@@ -11767,16 +11887,8 @@ static long GetNumberFromUser(  const wxString& msg,
                                 long max,
                                 wxWindow* parent)
 {
-#ifdef _WIN32
-    wxNumberEntryDialog dialog(parent, msg, prompt, title, value, min, max, wxDefaultPosition);
-    wxGetApp().UpdateDlgDarkUI(&dialog);
-    if (dialog.ShowModal() == wxID_OK)
-        return dialog.GetValue();
-
-    return -1;
-#else
-    return wxGetNumberFromUser(msg, prompt, title, value, min, max, parent);
-#endif
+    CopiesCountDialog dialog(parent, msg, prompt, title, value, min, max);
+    return dialog.ShowModal() == wxID_OK ? dialog.GetValue() : -1;
 }
 
 void Plater::set_number_of_copies(/*size_t num*/)
@@ -11801,12 +11913,21 @@ void Plater::set_number_of_copies(/*size_t num*/)
         decrease_instances(-diff);
 }
 
-void Plater::fill_bed_with_instances()
+void Plater::fill_bed_with_copies()
 {
     auto &w = get_ui_job_worker();
     if (w.is_idle()) {
         p->take_snapshot(_u8L("Arrange"));
         replace_job(w, std::make_unique<FillBedJob>());
+    }
+}
+
+void Plater::fill_bed_with_instances()
+{
+    auto &w = get_ui_job_worker();
+    if (w.is_idle()) {
+        p->take_snapshot(_u8L("Arrange"));
+        replace_job(w, std::make_unique<FillBedJob>(true));
     }
 }
 
@@ -14986,25 +15107,35 @@ bool Plater::priv::start_reorder_mode()
     auto state = std::make_unique<ObjectReorderState>();
     state->plate_index = partplate_list.get_curr_plate_index();
 
-    for (size_t idx = 0; idx < model.objects.size(); ++idx) {
-        ModelObject* obj = model.objects[idx];
-        const ModelInstance* primary = nullptr;
+    for (size_t obj_idx = 0; obj_idx < model.objects.size(); ++obj_idx) {
+        ModelObject* obj = model.objects[obj_idx];
         for (size_t inst_idx = 0; inst_idx < obj->instances.size(); ++inst_idx) {
-            if (plate->contain_instance(idx, inst_idx)) {
-                primary = obj->instances[inst_idx];
-                break;
-            }
+            if (!plate->contain_instance(obj_idx, inst_idx))
+                continue;
+            ModelInstance* inst = obj->instances[inst_idx];
+            if (inst == nullptr)
+                continue;
+            state->ordered_candidates.push_back(ObjectReorderState::InstanceCandidate{ obj, inst, obj_idx, inst_idx });
+            state->candidates_lookup.insert(inst);
         }
-        if (primary == nullptr)
-            continue;
-
-        state->ordered_candidates.push_back(obj);
-        state->candidates_lookup.insert(obj);
-        state->primary_instances[obj] = primary;
     }
 
     if (state->ordered_candidates.empty())
         return false;
+
+    std::vector<ModelInstance*> preassigned;
+    preassigned.reserve(state->ordered_candidates.size());
+    for (const auto& candidate : state->ordered_candidates) {
+        if (candidate.instance != nullptr && candidate.instance->print_order > 0)
+            preassigned.push_back(candidate.instance);
+    }
+    std::sort(preassigned.begin(), preassigned.end(), [](const ModelInstance* lhs, const ModelInstance* rhs) {
+        if (lhs->print_order != rhs->print_order)
+            return lhs->print_order < rhs->print_order;
+        return lhs < rhs;
+    });
+    preassigned.erase(std::unique(preassigned.begin(), preassigned.end()), preassigned.end());
+    state->sequence = preassigned;
 
     state->previous_labels_shown = q->are_view3D_labels_shown();
     state->forced_labels         = !state->previous_labels_shown;
@@ -15012,6 +15143,7 @@ bool Plater::priv::start_reorder_mode()
         q->show_view3D_labels(true);
 
     reorder_state = std::move(state);
+    reorder_state->refresh_overlay_labels();
     q->set_current_canvas_as_dirty();
     return true;
 }
@@ -15027,20 +15159,24 @@ bool Plater::priv::cancel_reorder_mode()
     return true;
 }
 
-bool Plater::priv::handle_reorder_pick(int object_idx)
+bool Plater::priv::handle_reorder_pick(int object_idx, int instance_idx)
 {
     if (!reorder_state || object_idx < 0 || size_t(object_idx) >= model.objects.size())
         return false;
 
     ModelObject* obj = model.objects[object_idx];
-    if (!reorder_state->contains(obj))
+    if (obj == nullptr || instance_idx < 0 || size_t(instance_idx) >= obj->instances.size())
         return false;
 
-    auto it = std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), obj);
+    ModelInstance* instance = obj->instances[instance_idx];
+    if (instance == nullptr || !reorder_state->contains(instance))
+        return false;
+
+    auto it = std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), instance);
     if (it != reorder_state->sequence.end())
         reorder_state->sequence.erase(it);
     else
-        reorder_state->sequence.push_back(obj);
+        reorder_state->sequence.push_back(instance);
 
     reorder_state->refresh_overlay_labels();
     q->set_current_canvas_as_dirty();
@@ -15058,26 +15194,63 @@ bool Plater::priv::apply_reorder_mode()
     if (candidates.empty())
         return false;
 
+    std::vector<ModelInstance*> desired_order;
+    desired_order.reserve(candidates.size());
+    auto append_instance = [&](ModelInstance* inst) {
+        if (inst == nullptr)
+            return;
+        if (std::find(desired_order.begin(), desired_order.end(), inst) == desired_order.end())
+            desired_order.push_back(inst);
+    };
+
+    for (ModelInstance* inst : reorder_state->sequence)
+        append_instance(inst);
+    for (const auto& candidate : candidates)
+        append_instance(candidate.instance);
+
+    int order_value = 1;
+    for (ModelInstance* inst : desired_order) {
+        if (inst == nullptr)
+            continue;
+        inst->arrange_order = order_value;
+        inst->print_order   = order_value;
+        ++order_value;
+    }
+
+    auto update_object_print_order = [](ModelObject* obj) {
+        if (obj == nullptr)
+            return;
+        int min_order = 0;
+        for (ModelInstance* instance : obj->instances) {
+            if (instance == nullptr || instance->print_order <= 0)
+                continue;
+            if (min_order == 0 || instance->print_order < min_order)
+                min_order = instance->print_order;
+        }
+        obj->print_order = min_order;
+    };
+
+    std::unordered_map<ModelObject*, int> object_min_order;
+    object_min_order.reserve(model.objects.size());
+    for (const auto& candidate : candidates) {
+        if (candidate.object == nullptr || candidate.instance == nullptr)
+            continue;
+        const int inst_order = candidate.instance->arrange_order;
+        auto it = object_min_order.find(candidate.object);
+        if (it == object_min_order.end() || inst_order < it->second)
+            object_min_order[candidate.object] = inst_order;
+        update_object_print_order(candidate.object);
+    }
+
     std::vector<size_t> indices;
-    indices.reserve(candidates.size());
+    indices.reserve(model.objects.size());
     for (size_t idx = 0; idx < model.objects.size(); ++idx) {
-        if (reorder_state->candidates_lookup.count(model.objects[idx]) > 0)
+        if (object_min_order.find(model.objects[idx]) != object_min_order.end())
             indices.push_back(idx);
     }
 
     if (indices.empty())
         return false;
-
-    std::vector<ModelObject*> desired_order;
-    desired_order.reserve(indices.size());
-    desired_order.insert(desired_order.end(), reorder_state->sequence.begin(), reorder_state->sequence.end());
-    for (ModelObject* obj : candidates) {
-        if (std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), obj) == reorder_state->sequence.end())
-            desired_order.push_back(obj);
-    }
-
-    if (desired_order.size() != indices.size())
-        desired_order.resize(indices.size());
 
     std::vector<size_t> sorted_indices = indices;
     std::sort(sorted_indices.begin(), sorted_indices.end());
@@ -15086,6 +15259,7 @@ bool Plater::priv::apply_reorder_mode()
     positions.reserve(model.objects.size());
     for (size_t i = 0; i < model.objects.size(); ++i)
         positions[model.objects[i]] = i;
+    auto positions_before = positions;
 
     auto move_object = [&](size_t from_idx, size_t to_idx, std::set<size_t>& touched_indices) {
         if (from_idx == to_idx)
@@ -15107,9 +15281,23 @@ bool Plater::priv::apply_reorder_mode()
 
     std::set<size_t> touched_indices;
 
+    std::vector<ModelObject*> desired_objects;
+    desired_objects.reserve(indices.size());
+    for (ModelObject* obj : model.objects) {
+        if (object_min_order.find(obj) != object_min_order.end())
+            desired_objects.push_back(obj);
+    }
+    std::sort(desired_objects.begin(), desired_objects.end(), [&](ModelObject* lhs, ModelObject* rhs) {
+        int lhs_order = object_min_order[lhs];
+        int rhs_order = object_min_order[rhs];
+        if (lhs_order != rhs_order)
+            return lhs_order < rhs_order;
+        return positions_before[lhs] < positions_before[rhs];
+    });
+
     Plater::TakeSnapshot snapshot(q, "Reorder object list");
-    for (size_t i = 0; i < desired_order.size(); ++i) {
-        ModelObject* obj = desired_order[i];
+    for (size_t i = 0; i < desired_objects.size() && i < sorted_indices.size(); ++i) {
+        ModelObject* obj = desired_objects[i];
         size_t target_pos = sorted_indices[i];
         auto it = positions.find(obj);
         if (it == positions.end())
@@ -15124,9 +15312,42 @@ bool Plater::priv::apply_reorder_mode()
         q->changed_objects(changed_indices);
     }
     q->object_list_changed();
+    q->ensure_custom_print_order_mode();
+    if (sidebar && sidebar->obj_list())
+        sidebar->obj_list()->refresh_print_order_column();
     if (reorder_state->forced_labels)
         q->show_view3D_labels(reorder_state->previous_labels_shown);
     reorder_state.reset();
+    q->set_current_canvas_as_dirty();
+    return true;
+}
+
+bool Plater::priv::clear_reorder_assignments()
+{
+    if (!reorder_state)
+        return false;
+
+    Plater::TakeSnapshot snapshot(q, "Clear print order");
+    std::unordered_set<ModelObject*> touched_objects;
+    for (const auto& candidate : reorder_state->ordered_candidates) {
+        if (candidate.instance != nullptr) {
+            candidate.instance->arrange_order = 0;
+            candidate.instance->print_order = 0;
+        }
+        if (candidate.object != nullptr)
+            touched_objects.insert(candidate.object);
+    }
+    for (ModelObject* obj : touched_objects)
+        obj->print_order = 0;
+
+    reorder_state->sequence.clear();
+    reorder_state->refresh_overlay_labels();
+    if (sidebar) {
+        sidebar->update_reorder_apply_state();
+        if (sidebar->obj_list())
+            sidebar->obj_list()->refresh_print_order_column();
+    }
+    q->object_list_changed();
     q->set_current_canvas_as_dirty();
     return true;
 }
@@ -15167,9 +15388,14 @@ bool Plater::apply_reorder_mode()
     return p->apply_reorder_mode();
 }
 
-bool Plater::handle_reorder_pick(int object_idx)
+bool Plater::clear_reorder_assignments()
 {
-    return p->handle_reorder_pick(object_idx);
+    return p->clear_reorder_assignments();
+}
+
+bool Plater::handle_reorder_pick(int object_idx, int instance_idx)
+{
+    return p->handle_reorder_pick(object_idx, instance_idx);
 }
 
 bool Plater::is_reorder_mode_active() const

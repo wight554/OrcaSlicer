@@ -220,6 +220,8 @@ public:
 
 
     void                create_objects_ctrl();
+    void                update_print_order_column_visibility();
+    void                refresh_print_order_column();
     // BBS
     void                update_objects_list_filament_column(size_t filaments_count);
     void                update_filament_colors();

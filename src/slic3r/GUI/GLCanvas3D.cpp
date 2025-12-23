@@ -3315,20 +3315,20 @@ void GLCanvas3D::on_char(wxKeyEvent& evt)
             break;
         }
 
-        //case '+': {
-        //    if (dynamic_cast<Preview*>(m_canvas->GetParent()) != nullptr)
-        //        post_event(wxKeyEvent(EVT_GLCANVAS_EDIT_COLOR_CHANGE, evt));
-        //    else
-        //        post_event(Event<int>(EVT_GLCANVAS_INCREASE_INSTANCES, +1));
-        //    break;
-        //}
-        //case '-': {
-        //    if (dynamic_cast<Preview*>(m_canvas->GetParent()) != nullptr)
-        //        post_event(wxKeyEvent(EVT_GLCANVAS_EDIT_COLOR_CHANGE, evt));
-        //    else
-        //        post_event(Event<int>(EVT_GLCANVAS_INCREASE_INSTANCES, -1));
-        //    break;
-        //}
+        case '+': {
+            if (dynamic_cast<Preview*>(m_canvas->GetParent()) != nullptr)
+                post_event(wxKeyEvent(EVT_GLCANVAS_EDIT_COLOR_CHANGE, evt));
+            else
+                post_event(Event<int>(EVT_GLCANVAS_INCREASE_INSTANCES, +1));
+            break;
+        }
+        case '-': {
+            if (dynamic_cast<Preview*>(m_canvas->GetParent()) != nullptr)
+                post_event(wxKeyEvent(EVT_GLCANVAS_EDIT_COLOR_CHANGE, evt));
+            else
+                post_event(Event<int>(EVT_GLCANVAS_INCREASE_INSTANCES, -1));
+            break;
+        }
         case '?': { post_event(SimpleEvent(EVT_GLCANVAS_QUESTION_MARK)); break; }
         case 'A':
         case 'a':
@@ -4214,7 +4214,8 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
                     int volume_idx = get_first_hover_volume_idx();
                     if (volume_idx >= 0) {
                         int object_idx = m_volumes.volumes[volume_idx]->object_idx();
-                        if (object_idx >= 0 && wxGetApp().plater()->handle_reorder_pick(object_idx)) {
+                        int instance_idx = m_volumes.volumes[volume_idx]->instance_idx();
+                        if (object_idx >= 0 && instance_idx >= 0 && wxGetApp().plater()->handle_reorder_pick(object_idx, instance_idx)) {
                             m_mouse.ignore_left_up = true;
                             m_mouse.set_start_position_3D_as_invalid();
                             return;
@@ -6395,6 +6396,12 @@ void GLCanvas3D::_switch_toolbars_icon_filename()
         item = m_main_toolbar.get_item("arrange");
         item->set_icon_filename(m_is_dark ? "toolbar_arrange_dark.svg" : "toolbar_arrange.svg");
 
+        item = m_main_toolbar.get_item("more");
+        item->set_icon_filename(m_is_dark ? "instance_add_dark.svg" : "instance_add.svg");
+
+        item = m_main_toolbar.get_item("fewer");
+        item->set_icon_filename(m_is_dark ? "instance_remove_dark.svg" : "instance_remove.svg");
+
         item = m_main_toolbar.get_item("splitobjects");
         item->set_icon_filename(m_is_dark ? "split_objects_dark.svg" : "split_objects.svg");
 
@@ -6542,6 +6549,27 @@ bool GLCanvas3D::_init_main_toolbar()
     item.right.render_callback = GLToolbarItem::Default_Render_Callback;
 
     if (!m_main_toolbar.add_separator())
+        return false;
+
+    item.name = "more";
+    item.icon_filename = m_is_dark ? "instance_add_dark.svg" : "instance_add.svg";
+    item.tooltip = _utf8(L("Add instance")) + " [+]";
+    item.sprite_id++;
+    item.left.render_callback = nullptr;
+    item.left.action_callback = [this]() { if (m_canvas != nullptr) wxPostEvent(m_canvas, SimpleEvent(EVT_GLTOOLBAR_MORE)); };
+    item.visibility_callback = GLToolbarItem::Default_Visibility_Callback;
+    item.left.toggable = false;
+    item.enabling_callback = []()->bool { return wxGetApp().plater()->can_increase_instances(); };
+    if (!m_main_toolbar.add_item(item))
+        return false;
+
+    item.name = "fewer";
+    item.icon_filename = m_is_dark ? "instance_remove_dark.svg" : "instance_remove.svg";
+    item.tooltip = _utf8(L("Remove instance")) + " [-]";
+    item.sprite_id++;
+    item.left.action_callback = [this]() { if (m_canvas != nullptr) wxPostEvent(m_canvas, SimpleEvent(EVT_GLTOOLBAR_FEWER)); };
+    item.enabling_callback = []()->bool { return wxGetApp().plater()->can_decrease_instances(); };
+    if (!m_main_toolbar.add_item(item))
         return false;
 
     item.name = "splitobjects";
@@ -7654,7 +7682,7 @@ void GLCanvas3D::_render_overlays()
 	auto curr_plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
     auto curr_print_seq = curr_plate->get_real_print_seq();
     const Print* print = fff_print();
-    bool sequential_print = (curr_print_seq == PrintSequence::ByObject) || print->config().print_order == PrintOrder::AsObjectList;
+    bool sequential_print = (curr_print_seq == PrintSequence::ByObject) || print->config().print_order == PrintOrder::CustomOrdering;
     std::vector<const ModelInstance*> sorted_instances;
     if (sequential_print) {
         if (print) {

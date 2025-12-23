@@ -1075,6 +1075,19 @@ bool Model::is_fuzzy_skin_painted() const
     return std::any_of(this->objects.cbegin(), this->objects.cend(), [](const ModelObject *mo) { return mo->is_fuzzy_skin_painted(); });
 }
 
+bool Model::has_custom_instance_order() const
+{
+    for (const ModelObject* object : this->objects) {
+        if (object == nullptr)
+            continue;
+        for (const ModelInstance* instance : object->instances) {
+            if (instance != nullptr && instance->print_order > 0)
+                return true;
+        }
+    }
+    return false;
+}
+
 
 static void add_cut_volume(TriangleMesh& mesh, ModelObject* object, const ModelVolume* src_volume, const Transform3d& cut_matrix, const std::string& suffix = {}, ModelVolumeType type = ModelVolumeType::MODEL_PART)
 {
@@ -1121,6 +1134,7 @@ ModelObject& ModelObject::assign_copy(const ModelObject &rhs)
     this->layer_config_ranges         = rhs.layer_config_ranges;
     this->layer_height_profile        = rhs.layer_height_profile;
     this->printable                   = rhs.printable;
+    this->print_order                 = rhs.print_order;
     this->origin_translation          = rhs.origin_translation;
     this->cut_id.copy(rhs.cut_id);
     this->copy_transformation_caches(rhs);
@@ -1161,6 +1175,7 @@ ModelObject& ModelObject::assign_copy(ModelObject &&rhs)
     this->layer_config_ranges         = std::move(rhs.layer_config_ranges);
     this->layer_height_profile        = std::move(rhs.layer_height_profile);
     this->printable                   = std::move(rhs.printable);
+    this->print_order                 = rhs.print_order;
     this->origin_translation          = std::move(rhs.origin_translation);
     this->copy_transformation_caches(rhs);
 

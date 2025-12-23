@@ -124,6 +124,7 @@ enum class PrintOrder
 {
     Default,
     AsObjectList,
+    CustomOrdering,
     Count,
 };
 

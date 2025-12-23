@@ -49,7 +49,7 @@ CloneDialog::CloneDialog(wxWindow *parent)
     dlg_btns->GetNEXT()->SetLabel(_L("Fill"));
     dlg_btns->GetNEXT()->SetToolTip(_L("Fill bed with copies"));
     dlg_btns->GetNEXT()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
-        m_plater->fill_bed_with_instances();
+        m_plater->fill_bed_with_copies();
         EndModal(wxID_OK);
     });
 
