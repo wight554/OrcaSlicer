@@ -7,7 +7,8 @@ Orca will limit the acceleration to not exceed the acceleration set in the Print
 - [Normal printing](#normal-printing)
 - [Outer wall](#outer-wall)
 - [Inner wall](#inner-wall)
-- [Bridge](#bridge)
+- [External bridge](#external-bridge)
+- [Internal bridge](#internal-bridge)
 - [Sparse infill](#sparse-infill)
 - [Internal solid infill](#internal-solid-infill)
 - [Initial layer](#initial-layer)
@@ -29,9 +30,13 @@ Acceleration for [outer wall](speed_settings_other_layers_speed#outer-wall) prin
 
 Acceleration for [inner wall](speed_settings_other_layers_speed#inner-wall) printing. This is usually set to a higher value than outer wall printing to improve speed.
 
-## Bridge
+## External bridge
 
-Acceleration of [bridges](speed_settings_overhang_speed#bridge-speed). If the value is expressed as a percentage (e.g. 50%), it will be calculated based on the outer wall acceleration.
+Acceleration of [external bridges and overhang perimeters](speed_settings_overhang_speed#bridge-speed). If the value is expressed as a percentage (e.g. 50%), it will be calculated based on the outer wall acceleration. Leave it at 0 to fall back to the default acceleration rules.
+
+## Internal bridge
+
+Acceleration of [internal bridges](speed_settings_overhang_speed#bridge-speed). If this value is set to 0, Orca Slicer will reuse the External bridge acceleration so you do not have to duplicate values manually.
 
 ## Sparse infill
 

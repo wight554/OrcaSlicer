@@ -125,6 +125,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "initial_layer_acceleration",
         "top_surface_acceleration",
         "bridge_acceleration",
+        "internal_bridge_acceleration",
         "travel_acceleration",
         "sparse_infill_acceleration",
         "internal_solid_infill_acceleration",
@@ -1497,6 +1498,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
 
             if (warning_key.empty() && m_default_object_config.default_jerk > 0) {
                std::vector<std::string> jerk_to_check = {"default_jerk",     "outer_wall_jerk",    "inner_wall_jerk", "infill_jerk",
+                                                         "bridge_jerk", "internal_bridge_jerk",
                                                          "top_surface_jerk", "initial_layer_jerk", "travel_jerk"};
                const auto               max_jerk = std::min(m_config.machine_max_jerk_x.values[0], m_config.machine_max_jerk_y.values[0]);
                warning_key.clear();
@@ -1535,6 +1537,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                         "inner_wall_acceleration",
                         "outer_wall_acceleration",
                         "bridge_acceleration",
+                        "internal_bridge_acceleration",
                         "initial_layer_acceleration",
                         "sparse_infill_acceleration",
                         "internal_solid_infill_acceleration",
@@ -1547,6 +1550,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                         "inner_wall_acceleration",
                         "outer_wall_acceleration",
                         "bridge_acceleration",
+                        "internal_bridge_acceleration",
                         "initial_layer_acceleration",
                         "sparse_infill_acceleration",
                         "internal_solid_infill_acceleration",

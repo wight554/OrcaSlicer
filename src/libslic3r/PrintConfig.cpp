@@ -2582,13 +2582,22 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionFloat(500));
 
     def = this->add("bridge_acceleration", coFloatOrPercent);
-    def->label = L("Bridge");
-    def->tooltip = L("Acceleration of bridges. If the value is expressed as a percentage (e.g. 50%), it will be calculated based on the outer wall acceleration.");
+    def->label = L("External bridge");
+    def->tooltip = L("Acceleration of external bridges and overhang perimeters. If the value is expressed as a percentage (e.g. 50%), it will be calculated based on the outer wall acceleration. Leave at 0 to fall back to the default acceleration logic.");
     def->sidetext = L("mm/s² or %");
     def->min = 0;
     def->mode = comAdvanced;
     def->ratio_over = "outer_wall_acceleration";
     def->set_default_value(new ConfigOptionFloatOrPercent(50,true));
+
+    def = this->add("internal_bridge_acceleration", coFloatOrPercent);
+    def->label = L("Internal bridge");
+    def->tooltip = L("Acceleration of internal bridges. If left at 0 it inherits the External bridge acceleration. Percentages are calculated based on the outer wall acceleration.");
+    def->sidetext = L("mm/s² or %");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->ratio_over = "outer_wall_acceleration";
+    def->set_default_value(new ConfigOptionFloatOrPercent(0,false));
 
     def = this->add("sparse_infill_acceleration", coFloatOrPercent);
     def->label = L("Sparse infill");
@@ -2678,6 +2687,22 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(9));
+
+    def = this->add("bridge_jerk", coFloat);
+    def->label = L("External bridge");
+    def->tooltip = L("Jerk for external bridges and overhang perimeters. Leave at 0 to reuse the Solid infill jerk value.");
+    def->sidetext = "mm/s";	// milimeters per second, don't need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("internal_bridge_jerk", coFloat);
+    def->label = L("Internal bridge");
+    def->tooltip = L("Jerk for internal bridges. Leave at 0 to reuse the Solid infill jerk value.");
+    def->sidetext = "mm/s";	// milimeters per second, don't need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("initial_layer_jerk", coFloat);
     def->label = L("Initial layer");

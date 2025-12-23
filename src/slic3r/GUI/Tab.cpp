@@ -2325,7 +2325,8 @@ void TabPrint::build()
         optgroup->append_single_option_line("default_acceleration", "speed_settings_acceleration#normal-printing");
         optgroup->append_single_option_line("outer_wall_acceleration", "speed_settings_acceleration#outer-wall");
         optgroup->append_single_option_line("inner_wall_acceleration", "speed_settings_acceleration#inner-wall");
-        optgroup->append_single_option_line("bridge_acceleration", "speed_settings_acceleration#bridge");
+        optgroup->append_single_option_line("bridge_acceleration", "speed_settings_acceleration#external-bridge");
+        optgroup->append_single_option_line("internal_bridge_acceleration", "speed_settings_acceleration#internal-bridge");
         optgroup->append_single_option_line("sparse_infill_acceleration", "speed_settings_acceleration#sparse-infill");
         optgroup->append_single_option_line("internal_solid_infill_acceleration", "speed_settings_acceleration#internal-solid-infill");
         optgroup->append_single_option_line("initial_layer_acceleration", "speed_settings_acceleration#initial-layer");
@@ -2339,6 +2340,8 @@ void TabPrint::build()
         optgroup->append_single_option_line("outer_wall_jerk", "speed_settings_jerk_xy#outer-wall");
         optgroup->append_single_option_line("inner_wall_jerk", "speed_settings_jerk_xy#inner-wall");
         optgroup->append_single_option_line("infill_jerk", "speed_settings_jerk_xy#infill");
+        optgroup->append_single_option_line("bridge_jerk", "speed_settings_jerk_xy#external-bridge");
+        optgroup->append_single_option_line("internal_bridge_jerk", "speed_settings_jerk_xy#internal-bridge");
         optgroup->append_single_option_line("top_surface_jerk", "speed_settings_jerk_xy#top-surface");
         optgroup->append_single_option_line("initial_layer_jerk", "speed_settings_jerk_xy#initial-layer");
         optgroup->append_single_option_line("travel_jerk", "speed_settings_jerk_xy#travel");

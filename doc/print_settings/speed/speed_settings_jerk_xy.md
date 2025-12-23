@@ -25,6 +25,8 @@ This setting overrides firmware jerk values when different motion types need spe
   - [Outer wall](#outer-wall)
   - [Inner wall](#inner-wall)
   - [Infill](#infill)
+  - [External bridge](#external-bridge)
+  - [Internal bridge](#internal-bridge)
   - [Top surface](#top-surface)
   - [Initial layer](#initial-layer)
   - [Travel](#travel)
@@ -49,6 +51,14 @@ Jerk for inner wall printing. This is usually set to a higher but still reasonab
 ### Infill
 
 Jerk for infill printing. This is usually set to a value higher than inner wall printing to improve speed.
+
+### External bridge
+
+Jerk for external bridges and overhang perimeters. If this value is left at 0, the [Solid infill jerk](#infill) setting will be used automatically.
+
+### Internal bridge
+
+Jerk for internal bridges. If this value is left at 0, the [Solid infill jerk](#infill) setting will be used automatically so internal bridges match the rest of the solid infill moves.
 
 ### Top surface
 

@@ -5249,20 +5249,33 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         } else if (this->object_layer_over_raft() && m_config.first_layer_acceleration_over_raft.value > 0) {
             acceleration = m_config.first_layer_acceleration_over_raft.value;
 #endif
-        } else if (m_config.get_abs_value("bridge_acceleration") > 0 && is_bridge(path.role())) {
-            acceleration = m_config.get_abs_value("bridge_acceleration");
-        } else if (m_config.get_abs_value("sparse_infill_acceleration") > 0 && (path.role() == erInternalInfill)) {
-            acceleration = m_config.get_abs_value("sparse_infill_acceleration");
-        } else if (m_config.get_abs_value("internal_solid_infill_acceleration") > 0 && (path.role() == erSolidInfill)) {
-            acceleration = m_config.get_abs_value("internal_solid_infill_acceleration");
-        } else if (m_config.outer_wall_acceleration.value > 0 && is_external_perimeter(path.role())) {
-            acceleration = m_config.outer_wall_acceleration.value;
-        } else if (m_config.inner_wall_acceleration.value > 0 && is_internal_perimeter(path.role())) {
-            acceleration = m_config.inner_wall_acceleration.value;
-        } else if (m_config.top_surface_acceleration.value > 0 && is_top_surface(path.role())) {
-            acceleration = m_config.top_surface_acceleration.value;
         } else {
-            acceleration = m_config.default_acceleration.value;
+            double bridge_acc = 0.0;
+            if (is_bridge(path.role())) {
+                const double external_bridge_acc = m_config.get_abs_value("bridge_acceleration");
+                if (path.role() == erInternalBridgeInfill) {
+                    const double internal_bridge_acc = m_config.get_abs_value("internal_bridge_acceleration");
+                    bridge_acc = internal_bridge_acc > 0.0 ? internal_bridge_acc : external_bridge_acc;
+                } else {
+                    bridge_acc = external_bridge_acc;
+                }
+            }
+
+            if (bridge_acc > 0.0)
+                acceleration = bridge_acc;
+            else if (m_config.get_abs_value("sparse_infill_acceleration") > 0 && (path.role() == erInternalInfill)) {
+                acceleration = m_config.get_abs_value("sparse_infill_acceleration");
+            } else if (m_config.get_abs_value("internal_solid_infill_acceleration") > 0 && (path.role() == erSolidInfill)) {
+                acceleration = m_config.get_abs_value("internal_solid_infill_acceleration");
+            } else if (m_config.outer_wall_acceleration.value > 0 && is_external_perimeter(path.role())) {
+                acceleration = m_config.outer_wall_acceleration.value;
+            } else if (m_config.inner_wall_acceleration.value > 0 && is_internal_perimeter(path.role())) {
+                acceleration = m_config.inner_wall_acceleration.value;
+            } else if (m_config.top_surface_acceleration.value > 0 && is_top_surface(path.role())) {
+                acceleration = m_config.top_surface_acceleration.value;
+            } else {
+                acceleration = m_config.default_acceleration.value;
+            }
         }
         acceleration_i = (unsigned int)floor(acceleration + 0.5);
     }
@@ -5271,17 +5284,30 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     if (m_config.default_jerk.value > 0) {
         if (this->on_first_layer() && m_config.initial_layer_jerk.value > 0) {
             jerk = m_config.initial_layer_jerk.value;
-        } else if (m_config.outer_wall_jerk.value > 0 && is_external_perimeter(path.role())) {
-             jerk = m_config.outer_wall_jerk.value;
-        } else if (m_config.inner_wall_jerk.value > 0 && is_internal_perimeter(path.role())) {
-            jerk = m_config.inner_wall_jerk.value;
-        } else if (m_config.top_surface_jerk.value > 0 && is_top_surface(path.role())) {
-            jerk = m_config.top_surface_jerk.value;
-        } else if (m_config.infill_jerk.value > 0 && is_infill(path.role())) {
-            jerk = m_config.infill_jerk.value;
-        }
-        else {
-            jerk = m_config.default_jerk.value;
+        } else {
+            double bridge_jerk = 0.0;
+            if (is_bridge(path.role())) {
+                if (path.role() == erInternalBridgeInfill) {
+                    bridge_jerk = (m_config.internal_bridge_jerk.value > 0.0) ? m_config.internal_bridge_jerk.value : m_config.infill_jerk.value;
+                } else {
+                    bridge_jerk = (m_config.bridge_jerk.value > 0.0) ? m_config.bridge_jerk.value : m_config.infill_jerk.value;
+                }
+            }
+
+            if (bridge_jerk > 0.0)
+                jerk = bridge_jerk;
+            else if (m_config.outer_wall_jerk.value > 0 && is_external_perimeter(path.role())) {
+                jerk = m_config.outer_wall_jerk.value;
+            } else if (m_config.inner_wall_jerk.value > 0 && is_internal_perimeter(path.role())) {
+                jerk = m_config.inner_wall_jerk.value;
+            } else if (m_config.top_surface_jerk.value > 0 && is_top_surface(path.role())) {
+                jerk = m_config.top_surface_jerk.value;
+            } else if (m_config.infill_jerk.value > 0 && is_infill(path.role())) {
+                jerk = m_config.infill_jerk.value;
+            }
+            else {
+                jerk = m_config.default_jerk.value;
+            }
         }
     }
 
