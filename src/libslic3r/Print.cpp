@@ -31,6 +31,7 @@
 
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
+#include <fstream>
 
 //BBS: add json support
 #include "nlohmann/json.hpp"
@@ -38,6 +39,10 @@
 #include "GCode/ConflictChecker.hpp"
 
 #include <codecvt>
+
+static constexpr double DEFAULT_FILAMENT_DIAMETER = 1.75;
+static constexpr double DEFAULT_FILAMENT_DENSITY  = 1.245;
+static constexpr double DEFAULT_FILAMENT_COST     = 29.99;
 
 using namespace nlohmann;
 
@@ -100,6 +105,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "printing_by_object_gcode",
         "filament_end_gcode",
         "post_process",
+        "preview_process",
         "extruder_clearance_height_to_rod",
         "extruder_clearance_height_to_lid",
         "extruder_clearance_radius",
@@ -2965,6 +2971,78 @@ void Print::set_gcode_file_invalidated()
 }
 
 //BBS: add gcode file preload logic
+void Print::populate_statistics_from_result(const GCodeProcessorResult& res)
+{
+    m_print_statistics.clear();
+    try {
+        // Estimated times (string form)
+        auto mode_time = [&](PrintEstimatedStatistics::ETimeMode mode) {
+            const auto& m = res.print_statistics.modes[static_cast<size_t>(mode)];
+            return short_time(get_time_dhms(m.time));
+        };
+        m_print_statistics.estimated_normal_print_time = mode_time(PrintEstimatedStatistics::ETimeMode::Normal);
+        m_print_statistics.estimated_silent_print_time = mode_time(PrintEstimatedStatistics::ETimeMode::Stealth);
+
+        auto area_from_diameter = [](double d_mm) {
+            const double r = 0.5 * d_mm;
+            return PI * r * r;
+        };
+
+        double total_volume = 0.0;
+        double total_length_mm = 0.0;
+        double total_weight_g = 0.0;
+        double total_cost = 0.0;
+        double total_wipe_length_mm = 0.0;
+        double total_wipe_cost = 0.0;
+        int total_toolchanges = static_cast<int>(res.print_statistics.total_filamentchanges);
+
+        auto get_or = [](const auto& vec, size_t idx, double fallback) {
+            return idx < vec.size() ? static_cast<double>(vec[idx]) : fallback;
+        };
+
+        for (const auto& [extruder_id, volume] : res.print_statistics.total_volumes_per_extruder) {
+            const double diameter = get_or(res.filament_diameters, extruder_id, DEFAULT_FILAMENT_DIAMETER);
+            const double density = get_or(res.filament_densities, extruder_id, DEFAULT_FILAMENT_DENSITY);
+            const double cost_per_kg = get_or(res.filament_costs, extruder_id, DEFAULT_FILAMENT_COST);
+            const double area = std::max(area_from_diameter(diameter), 1e-6);
+            const double length_mm = volume / area;
+            const double weight_g = volume * density * 0.001; // mm^3 -> g
+            const double cost = weight_g * cost_per_kg * 0.001; // cost/kg -> cost/g
+
+            total_volume += volume;
+            total_length_mm += length_mm;
+            total_weight_g += weight_g;
+            total_cost += cost;
+
+            m_print_statistics.filament_stats[extruder_id] = volume;
+        }
+
+        for (const auto& [extruder_id, volume] : res.print_statistics.wipe_tower_volumes_per_extruder) {
+            const double diameter = get_or(res.filament_diameters, extruder_id, DEFAULT_FILAMENT_DIAMETER);
+            const double density = get_or(res.filament_densities, extruder_id, DEFAULT_FILAMENT_DENSITY);
+            const double cost_per_kg = get_or(res.filament_costs, extruder_id, DEFAULT_FILAMENT_COST);
+            const double area = std::max(area_from_diameter(diameter), 1e-6);
+            const double length_mm = volume / area;
+            const double weight_g = volume * density * 0.001;
+            const double cost = weight_g * cost_per_kg * 0.001;
+            total_wipe_length_mm += length_mm;
+            total_wipe_cost += cost;
+        }
+
+        m_print_statistics.total_extruded_volume = total_volume;
+        m_print_statistics.total_used_filament = total_length_mm;
+        m_print_statistics.total_weight = total_weight_g;
+        m_print_statistics.total_cost = total_cost;
+        m_print_statistics.total_wipe_tower_filament = total_wipe_length_mm;
+        m_print_statistics.total_wipe_tower_cost = total_wipe_cost;
+        m_print_statistics.total_toolchanges = total_toolchanges;
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "populate_statistics_from_result exception: " << ex.what();
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << "populate_statistics_from_result unknown exception";
+    }
+}
+
 void Print::export_gcode_from_previous_file(const std::string& file, GCodeProcessorResult* result, ThumbnailsGeneratorCallback thumbnail_cb)
 {
     try {
@@ -2976,6 +3054,7 @@ void Print::export_gcode_from_previous_file(const std::string& file, GCodeProces
         processor.process_file(file);
 
         *result = std::move(processor.extract_result());
+        populate_statistics_from_result(*result);
     } catch (std::exception & /* ex */) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ <<  boost::format(": found errors when process gcode file %1%") %file.c_str();
         throw Slic3r::RuntimeError(

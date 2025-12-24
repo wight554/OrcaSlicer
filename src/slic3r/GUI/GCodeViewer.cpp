@@ -5705,6 +5705,10 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     show_settings &= (m_view_type == EViewType::FeatureType || m_view_type == EViewType::Tool);
     show_settings &= has_settings;
     if (show_settings) {
+        ImGui::Dummy(ImVec2(0.0f, ImGui::GetFontSize() * 0.1));
+        ImGui::Dummy({ window_padding, window_padding });
+        ImGui::SameLine();
+        imgui.title(_u8L("Settings"));
         auto calc_offset = [this]() {
             float ret = 0.0f;
             if (!m_settings_ids.printer.empty())
@@ -5720,9 +5724,6 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
                 ret += 2.0f * ImGui::GetStyle().ItemSpacing.x;
             return ret;
         };
-
-        ImGui::Spacing();
-        imgui.title(_u8L("Settings"));
 
         float offset = calc_offset();
 
@@ -6130,4 +6131,3 @@ ColorRGBA GCodeViewer::option_color(EMoveType move_type) const
 
 } // namespace GUI
 } // namespace Slic3r
-

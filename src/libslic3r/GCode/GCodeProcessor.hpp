@@ -851,6 +851,18 @@ class Print;
         Print* m_print{ nullptr };
 
         GCodeProcessorResult m_result;
+        struct TimeOverride
+        {
+            std::optional<float> total;
+            std::optional<float> prepare;
+        };
+        std::array<TimeOverride, static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count)> m_time_overrides;
+        struct TimeBaseline
+        {
+            std::optional<float> total;
+            std::optional<float> prepare;
+        };
+        std::array<TimeBaseline, static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count)> m_time_baseline;
         static unsigned int s_result_id;
 
 #if ENABLE_GCODE_VIEWER_DATA_CHECKING
@@ -884,6 +896,11 @@ class Print;
         void process_buffer(const std::string& buffer);
         void finalize(bool post_process);
 
+        // Capture baseline estimates from an existing statistics set (for change detection when re-parsing).
+        void set_baseline_estimates(const PrintEstimatedStatistics& stats);
+        // Clear baseline estimates.
+        void reset_baseline_estimates();
+
         float get_time(PrintEstimatedStatistics::ETimeMode mode) const;
         float get_prepare_time(PrintEstimatedStatistics::ETimeMode mode) const;
         std::string get_time_dhm(PrintEstimatedStatistics::ETimeMode mode) const;
@@ -904,6 +921,9 @@ class Print;
         void apply_config(const DynamicPrintConfig& config);
         void apply_config_simplify3d(const std::string& filename);
         void apply_config_superslicer(const std::string& filename);
+        void parse_estimated_time_comment(const std::string_view comment);
+        void apply_time_overrides();
+        void ensure_filament_metadata();
         void process_gcode_line(const GCodeReader::GCodeLine& line, bool producers_enabled);
 
         // Process tags embedded into comments
@@ -1078,5 +1098,3 @@ class Print;
 } /* namespace Slic3r */
 
 #endif /* slic3r_GCodeProcessor_hpp_ */
-
-

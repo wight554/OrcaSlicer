@@ -934,6 +934,9 @@ public:
     const WipeTowerData&        wipe_tower_data(size_t filaments_cnt = 0) const;
     const ToolOrdering& 		tool_ordering() const { return m_tool_ordering; }
 
+    // Populate print statistics from an already parsed G-code result (used when loading existing G-code).
+    void populate_statistics_from_result(const GCodeProcessorResult& res);
+
     bool                        enable_timelapse_print() const;
 
 	std::string                 output_filename(const std::string &filename_base = std::string()) const override;

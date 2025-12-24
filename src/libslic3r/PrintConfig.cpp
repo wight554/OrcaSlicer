@@ -4150,6 +4150,21 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
     
+    def = this->add("preview_process", coStrings);
+    def->label = L("Preview Pre-processing Scripts");
+    def->tooltip = L("If you want to process the G-code before switching to preview tab, "
+                   "just list the absolute paths to your scripts here. Separate multiple scripts with a semicolon. "
+                   "Scripts will be passed the absolute path to the G-code file as the first argument, "
+                   "and they can access the Orca Slicer config settings by reading environment variables. "
+                   "These scripts run after slicing but before the preview is displayed. "
+                   "Note: Modifications made by these scripts will persist to the final exported G-code.");
+    def->gui_flags = "serialized";
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 6;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings());
+    
     def = this->add("printer_model", coString);
     def->label = L("Printer type");
     def->tooltip = L("Type of the printer.");
