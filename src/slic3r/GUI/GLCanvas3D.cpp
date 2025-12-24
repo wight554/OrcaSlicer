@@ -3121,6 +3121,13 @@ void GLCanvas3D::on_char(wxKeyEvent& evt)
         is_in_painting_mode = true;
     }
 
+    // Check if reorder mode is active - in this mode, only allow ESC to exit
+    bool reorder_mode = wxGetApp().plater()->is_reorder_mode_active();
+    if (reorder_mode && keyCode != WXK_ESCAPE) {
+        // Consume all key events except ESC in reorder mode to prevent crashes
+        return;
+    }
+
     //BBS: add orient deactivate logic
     if (keyCode == WXK_ESCAPE
         && (_deactivate_arrange_menu() || _deactivate_orient_menu()))
@@ -3279,7 +3286,13 @@ void GLCanvas3D::on_char(wxKeyEvent& evt)
 #ifdef __APPLE__
         case WXK_BACK: { post_event(SimpleEvent(EVT_GLTOOLBAR_DELETE)); break; }
 #endif
-        case WXK_ESCAPE: { deselect_all(); break; }
+        case WXK_ESCAPE: {
+            if (wxGetApp().plater()->is_reorder_mode_active())
+                wxGetApp().plater()->cancel_reorder_mode();
+            else
+                deselect_all();
+            break;
+        }
         case WXK_F5: {
             if (wxGetApp().mainframe->is_printer_view())
                 wxGetApp().mainframe->load_printer_url();
