@@ -1415,16 +1415,27 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             const bool instances_match_ids = model_object.instances.size() == model_object_new.instances.size() &&
                 std::equal(model_object.instances.begin(), model_object.instances.end(), model_object_new.instances.begin(),
                     [](auto l, auto r) { return l->id() == r->id(); });
-            if (instances_match_ids &&
-                ! std::equal(model_object.instances.begin(), model_object.instances.end(), model_object_new.instances.begin(),
-                    [](auto l, auto r) { return l->arrange_order == r->arrange_order && l->print_order == r->print_order; })) {
-                update_apply_status(this->invalidate_step(psGCodeExport));
+
+            if (instances_match_ids) {
+                bool print_order_changed = false;
+                if (!std::equal(model_object.instances.begin(), model_object.instances.end(), model_object_new.instances.begin(),
+                        [](auto l, auto r) { return l->print_order == r->print_order; }))
+                    print_order_changed = true;
+                if (model_object.print_order != model_object_new.print_order)
+                    print_order_changed = true;
+
                 auto new_instance = model_object_new.instances.begin();
                 for (ModelInstance* old_instance : model_object.instances) {
                     old_instance->arrange_order = (*new_instance)->arrange_order;
                     old_instance->print_order   = (*new_instance)->print_order;
                     ++new_instance;
                 }
+                model_object.print_order = model_object_new.print_order;
+
+                if (print_order_changed)
+                    update_apply_status(this->invalidate_step(psGCodeExport));
+            } else {
+                model_object.print_order = model_object_new.print_order;
             }
 
         }
