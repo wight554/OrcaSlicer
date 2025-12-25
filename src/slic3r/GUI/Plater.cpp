@@ -4833,6 +4833,12 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
             if (msg.ShowModal() == wxID_YES) {}
         }
     }
+
+    // Ensure all instances are registered with plates for reordering functionality
+    if (load_model) {
+        partplate_list.reload_all_objects();
+    }
+
     return obj_idxs;
 }
 
@@ -11757,10 +11763,19 @@ void Plater::increase_instances(size_t num)
 
     double offset_base = canvas3D()->get_size_proportional_to_max_bed_size(0.05);
     double offset = offset_base;
+    size_t original_instance_count = model_object->instances.size();
     for (size_t i = 0; i < num; i++, offset += offset_base) {
         Vec3d offset_vec = model_instance->get_offset() + Vec3d(offset, offset, 0.0);
         model_object->add_instance(offset_vec, model_instance->get_scaling_factor(), model_instance->get_rotation(), model_instance->get_mirror());
 //        p->print.get_object(obj_idx)->add_copy(Slic3r::to_2d(offset_vec));
+    }
+
+    // Add the new instances to the current plate
+    PartPlate* current_plate = p->partplate_list.get_curr_plate();
+    if (current_plate != nullptr) {
+        for (size_t i = original_instance_count; i < model_object->instances.size(); ++i) {
+            current_plate->add_instance(obj_idx, i, false);
+        }
     }
 
 #ifdef SUPPORT_AUTO_CENTER
@@ -11792,8 +11807,15 @@ void Plater::decrease_instances(size_t num)
 
     ModelObject* model_object = p->model.objects[obj_idx];
     if (model_object->instances.size() > num) {
-        for (size_t i = 0; i < num; ++ i)
+        // Remove the last num instances from the current plate before deleting them
+        PartPlate* current_plate = p->partplate_list.get_curr_plate();
+        for (size_t i = 0; i < num; ++i) {
+            size_t instance_idx = model_object->instances.size() - 1;
+            if (current_plate != nullptr) {
+                current_plate->remove_instance(obj_idx, instance_idx);
+            }
             model_object->delete_last_instance();
+        }
         p->update();
         // Delete object from Sidebar list. Do it after update, so that the GLScene selection is updated with the modified model.
         sidebar().obj_list()->decrease_object_instances(obj_idx, num);
@@ -15169,7 +15191,15 @@ bool Plater::priv::handle_reorder_pick(int object_idx, int instance_idx)
         return false;
 
     ModelInstance* instance = obj->instances[instance_idx];
-    if (instance == nullptr || !reorder_state->contains(instance))
+    if (instance == nullptr)
+        return false;
+
+    // Ensure the instance is on the current plate
+    PartPlate* plate = partplate_list.get_curr_plate();
+    if (plate == nullptr || !plate->contain_instance(object_idx, instance_idx))
+        return false;
+
+    if (!reorder_state->contains(instance))
         return false;
 
     auto it = std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), instance);
