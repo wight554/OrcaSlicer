@@ -376,4 +376,65 @@ bool run_post_process_scripts(std::string &src_path, bool make_copy, const std::
     return true;
 }
 
+// Run preview pre-processing scripts if defined.
+// These scripts run after slicing but before the preview is displayed.
+// Returns true if a preview pre-processing script was executed.
+// Returns false if no preview pre-processing script was defined.
+// Throws an exception on error.
+bool run_preview_process_scripts(std::string &src_path, const DynamicPrintConfig &config)
+{
+    const auto *preview_process = config.opt<ConfigOptionStrings>("preview_process");
+    if (// likely running in SLA mode or no preview processing script defined
+        preview_process == nullptr ||
+        preview_process->values.empty())
+        return false;
+
+    auto gcode_file = boost::filesystem::path(src_path);
+    if (! boost::filesystem::exists(gcode_file))
+        throw Slic3r::RuntimeError(std::string("Preview pre-processor can't find exported gcode file"));
+
+    // Store print configuration into environment variables.
+    config.setenv_();
+    // Let the script know this is preview processing
+    boost::nowide::setenv("SLIC3R_PP_PREVIEW", "1", 1);
+    // Set output name to the source path for preview processing
+    boost::nowide::setenv("SLIC3R_PP_OUTPUT_NAME", src_path.c_str(), 1);
+
+    try {
+        for (const std::string &scripts : preview_process->values) {
+            std::vector<std::string> lines;
+            boost::split(lines, scripts, boost::is_any_of("\r\n"));
+            for (std::string script : lines) {
+                // Ignore empty preview processing script lines.
+                boost::trim(script);
+                if (script.empty())
+                    continue;
+                BOOST_LOG_TRIVIAL(info) << "Executing preview pre-processing script " << script << " on file " << src_path;
+                std::string std_err;
+                const int result = run_script(script, gcode_file.string(), std_err);
+                if (result != 0) {
+                    const std::string msg = std_err.empty()
+                        ? (boost::format("Preview pre-processing script %1% on file %2% failed.\nError code: %3%") % script % src_path % result).str()
+                        : (boost::format("Preview pre-processing script %1% on file %2% failed.\nError code: %3%\nOutput:\n%4%") % script % src_path % result % std_err).str();
+                    BOOST_LOG_TRIVIAL(error) << msg;
+                    throw Slic3r::RuntimeError(msg);
+                }
+                if (! boost::filesystem::exists(gcode_file)) {
+                    const std::string msg = (boost::format(_(L(
+                        "Preview pre-processing script %1% failed.\n\n"
+                        "The preview pre-processing script is expected to modify the G-code file %2% in place, but the G-code file was deleted.\n"
+                        "Please adjust the preview pre-processing script to modify the G-code in place.\n")))
+                        % script % src_path).str();
+                    BOOST_LOG_TRIVIAL(error) << msg;
+                    throw Slic3r::RuntimeError(msg);
+                }
+            }
+        }
+    } catch (...) {
+        throw;
+    }
+
+    return true;
+}
+
 } // namespace Slic3r

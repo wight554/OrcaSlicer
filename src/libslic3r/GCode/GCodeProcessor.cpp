@@ -14,12 +14,15 @@
 #include <boost/nowide/fstream.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include <boost/filesystem/path.hpp>
+#include <boost/algorithm/string.hpp>
 
 #include <fast_float/fast_float.h>
 
 #include <float.h>
 #include <assert.h>
 #include <regex>
+#include <cctype>
+#include <algorithm>
 #include <charconv>
 #include <string>
 #include <system_error>
@@ -51,6 +54,97 @@ static const int   DEFAULT_FILAMENT_VITRIFICATION_TEMPERATURE = 0;
 static const Slic3r::Vec3f DEFAULT_EXTRUDER_OFFSET = Slic3r::Vec3f::Zero();
 
 namespace Slic3r {
+
+namespace {
+
+std::optional<float> parse_time_seconds(std::string_view text)
+{
+    std::string normalized(text);
+    boost::algorithm::trim(normalized);
+    if (normalized.empty())
+        return std::nullopt;
+
+    static const std::regex time_re(R"((\d+(?:\.\d+)?)\s*([dhms]))", std::regex_constants::icase);
+    double seconds = 0.0;
+    bool   matched = false;
+    for (auto it = std::sregex_iterator(normalized.begin(), normalized.end(), time_re); it != std::sregex_iterator(); ++it) {
+        double value = std::stod((*it)[1].str());
+        const char unit = static_cast<char>(std::tolower((*it)[2].str().front()));
+        double mul = 1.0;
+        switch (unit) {
+        case 'd': mul = 86400.0; break;
+        case 'h': mul = 3600.0; break;
+        case 'm': mul = 60.0; break;
+        default: break;
+        }
+        seconds += value * mul;
+        matched = true;
+    }
+
+    if (!matched)
+        return std::nullopt;
+
+    return static_cast<float>(seconds);
+}
+
+std::optional<float> parse_time_after_keyword(const std::string& lower_comment, const std::string& keyword)
+{
+    size_t pos = lower_comment.find(keyword);
+    if (pos == std::string::npos)
+        return std::nullopt;
+    pos = lower_comment.find_first_of("=:", pos + keyword.size());
+    if (pos == std::string::npos || pos + 1 >= lower_comment.size())
+        return std::nullopt;
+    std::string value = lower_comment.substr(pos + 1);
+    const size_t semicolon_pos = value.find(';');
+    if (semicolon_pos != std::string::npos)
+        value = value.substr(0, semicolon_pos);
+    boost::algorithm::trim(value);
+    return parse_time_seconds(value);
+}
+
+} // namespace
+
+static constexpr double kPI = 3.14159265358979323846;
+
+void GCodeProcessor::ensure_filament_metadata()
+{
+    size_t count = m_result.extruders_count;
+    if (count == 0)
+        count = std::max<size_t>(1, m_result.filament_diameters.size());
+    if (count == 0)
+        count = 1;
+
+    auto ensure_size = [count](auto& vec, auto value) {
+        if (vec.size() < count)
+            vec.resize(count, value);
+    };
+
+    ensure_size(m_result.filament_diameters, DEFAULT_FILAMENT_DIAMETER);
+    ensure_size(m_result.filament_densities, DEFAULT_FILAMENT_DENSITY);
+    ensure_size(m_result.filament_costs, DEFAULT_FILAMENT_COST);
+    ensure_size(m_result.required_nozzle_HRC, DEFAULT_FILAMENT_HRC);
+    ensure_size(m_result.filament_vitrification_temperature, DEFAULT_FILAMENT_VITRIFICATION_TEMPERATURE);
+    ensure_size(m_extruder_offsets, DEFAULT_EXTRUDER_OFFSET);
+
+    m_result.extruders_count = count;
+}
+
+void GCodeProcessor::set_baseline_estimates(const PrintEstimatedStatistics& stats)
+{
+    for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
+        m_time_baseline[i].total = stats.modes[i].time > 0.0f ? std::make_optional(stats.modes[i].time) : std::nullopt;
+        m_time_baseline[i].prepare = stats.modes[i].prepare_time > 0.0f ? std::make_optional(stats.modes[i].prepare_time) : std::nullopt;
+    }
+}
+
+void GCodeProcessor::reset_baseline_estimates()
+{
+    for (auto& b : m_time_baseline) {
+        b.total.reset();
+        b.prepare.reset();
+    }
+}
 
 const std::vector<std::string> GCodeProcessor::Reserved_Tags = {
     " FEATURE: ",
@@ -1255,6 +1349,9 @@ void GCodeProcessor::reset()
 
     m_result.reset();
     m_result.id = ++s_result_id;
+    for (auto& slot : m_time_overrides)
+        slot = {};
+    reset_baseline_estimates();
 
     m_last_default_color_id = 0;
 
@@ -1335,6 +1432,8 @@ void GCodeProcessor::process_file(const std::string& filename, std::function<voi
             apply_config_superslicer(filename);
     }
 
+    ensure_filament_metadata();
+
     // process gcode
     m_result.filename = filename;
     m_result.id = ++s_result_id;
@@ -1353,6 +1452,51 @@ void GCodeProcessor::process_file(const std::string& filename, std::function<voi
 
     // Don't post-process the G-code to update time stamps.
     this->finalize(false);
+}
+
+void GCodeProcessor::parse_estimated_time_comment(const std::string_view comment_view)
+{
+    if (comment_view.empty())
+        return;
+
+    std::string comment = boost::algorithm::to_lower_copy(std::string(comment_view));
+    boost::algorithm::trim(comment);
+    if (comment.empty())
+        return;
+
+    auto set_override = [this](PrintEstimatedStatistics::ETimeMode mode, std::optional<float> value, bool prepare) {
+        if (!value)
+            return;
+        auto& slot = m_time_overrides[static_cast<size_t>(mode)];
+        if (prepare)
+            slot.prepare = *value;
+        else
+            slot.total = *value;
+    };
+
+    set_override(PrintEstimatedStatistics::ETimeMode::Normal,
+                 parse_time_after_keyword(comment, "estimated printing time (normal mode)"),
+                 false);
+    set_override(PrintEstimatedStatistics::ETimeMode::Stealth,
+                 parse_time_after_keyword(comment, "estimated printing time (silent mode)"),
+                 false);
+    set_override(PrintEstimatedStatistics::ETimeMode::Normal,
+                 parse_time_after_keyword(comment, "estimated first layer printing time (normal mode)"),
+                 true);
+    set_override(PrintEstimatedStatistics::ETimeMode::Stealth,
+                 parse_time_after_keyword(comment, "estimated first layer printing time (silent mode)"),
+                 true);
+
+    // Bambu style header: "; model printing time: XX; total estimated time: YY"
+    if (comment.find("model printing time") != std::string::npos || comment.find("total estimated time") != std::string::npos) {
+        auto total = parse_time_after_keyword(comment, "total estimated time");
+        auto model = parse_time_after_keyword(comment, "model printing time");
+        if (total) {
+            set_override(PrintEstimatedStatistics::ETimeMode::Normal, total, false);
+            if (model && *total >= *model)
+                set_override(PrintEstimatedStatistics::ETimeMode::Normal, *total - *model, true);
+        }
+    }
 }
 
 void GCodeProcessor::initialize(const std::string& filename)
@@ -1378,6 +1522,50 @@ void GCodeProcessor::process_buffer(const std::string &buffer)
     });
 }
 
+void GCodeProcessor::apply_time_overrides()
+{
+    for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
+        const auto& override_slot = m_time_overrides[i];
+        if (!override_slot.total)
+            continue;
+
+        // If baseline exists and override matches baseline closely, treat it as unchanged and
+        // prefer recalculated values (post-script G-code modifications).
+        const auto& baseline = m_time_baseline[i];
+        auto nearly_equal = [](float a, float b) { return std::fabs(a - b) <= 1.0f; };
+        if (baseline.total && nearly_equal(*override_slot.total, *baseline.total)) {
+            // If prepare time is present, also require it to match if baseline had it.
+            if (!baseline.prepare || !override_slot.prepare || nearly_equal(*override_slot.prepare, *baseline.prepare))
+                continue;
+        }
+
+        TimeMachine& machine = m_time_processor.machines[i];
+        const float old_total = machine.time;
+        const float new_total = std::max(0.0f, *override_slot.total);
+        const bool can_scale = old_total > 0.0f && new_total > 0.0f;
+        const float scale = can_scale ? new_total / old_total : 0.0f;
+
+        machine.time = new_total;
+        if (override_slot.prepare)
+            machine.prepare_time = *override_slot.prepare;
+        else if (can_scale)
+            machine.prepare_time *= scale;
+
+        if (can_scale) {
+            for (auto& entry : machine.gcode_time.times)
+                entry.second *= scale;
+            for (float& val : machine.moves_time)
+                val *= scale;
+            for (float& val : machine.roles_time)
+                val *= scale;
+            for (float& val : machine.layers_time)
+                val *= scale;
+            for (auto& stop : machine.stop_times)
+                stop.elapsed_time *= scale;
+        }
+    }
+}
+
 void GCodeProcessor::finalize(bool post_process)
 {
     // update width/height of wipe moves
@@ -1399,6 +1587,7 @@ void GCodeProcessor::finalize(bool post_process)
 
     m_used_filaments.process_caches(this);
 
+    apply_time_overrides();
     update_estimated_times_stats();
     auto time_mode = m_result.print_statistics.modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
 
@@ -1624,6 +1813,10 @@ void GCodeProcessor::process_gcode_line(const GCodeReader::GCodeLine& line, bool
 /* std::cout << line.raw() << std::endl; */
 
     ++m_line_id;
+
+    const std::string_view comment_view = line.comment();
+    if (!comment_view.empty())
+        parse_estimated_time_comment(comment_view);
 
     // update start position
     m_start_position = m_end_position;

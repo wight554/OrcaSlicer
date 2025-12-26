@@ -227,17 +227,45 @@ void BackgroundSlicingProcess::process_fff()
 
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: gcode_result reseted, will start print::process")%__LINE__;
 		m_print->process();
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: after print::process, send slicing complete event to gui...")%__LINE__;
-
-		wxCommandEvent evt(m_event_slicing_completed_id);
-		// Post the Slicing Finished message for the G-code viewer to update.
-		// Passing the timestamp
-		evt.SetInt((int)(m_fff_print->step_state_with_timestamp(PrintStep::psSlicingFinished).timestamp));
-		wxQueueEvent(GUI::wxGetApp().mainframe->m_plater, evt.Clone());
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: after print::process")%__LINE__;
 
 		//BBS: add plate index into render params
 		m_temp_output_path = this->get_current_plate()->get_tmp_gcode_path();
 		m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });
+		
+		// Run preview pre-processing scripts (modifies G-code before preview and export)
+		if (m_gcode_result && run_preview_process_scripts(m_temp_output_path, m_fff_print->full_print_config())) {
+			// Scripts were executed and modified the G-code, re-parse it to update preview and statistics
+			try {
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Preview scripts executed, re-parsing G-code to update statistics";
+				GCodeProcessor processor;
+				GCodeProcessor::s_IsBBLPrinter = m_fff_print->is_BBL_printer();
+				const Vec3d origin = m_fff_print->get_plate_origin();
+				processor.set_xy_offset(origin(0), origin(1));
+				// Provide baseline estimates so we can detect untouched (stale) estimate comments
+				processor.set_baseline_estimates(m_gcode_result->print_statistics);
+				processor.process_file(m_temp_output_path);
+
+				// Extract the re-parsed result with updated statistics
+				// The new result will have a different ID (auto-incremented in GCodeProcessor)
+				// which will cause the viewer to reload and display the updated statistics
+				*m_gcode_result = std::move(processor.extract_result());
+				// Populate print-level statistics used by UI (legend, filename placeholders, etc.)
+				m_fff_print->populate_statistics_from_result(*m_gcode_result);
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": G-code re-parsed successfully, new result ID: " << m_gcode_result->id;
+			} catch (std::exception &ex) {
+				BOOST_LOG_TRIVIAL(error) << "Failed to re-parse G-code after preview pre-processing: " << ex.what();
+				// Continue anyway, using the original result
+			}
+		}
+		
+		// Post the Slicing Finished message AFTER preview scripts and re-parsing
+		// This ensures the G-code viewer loads with the final statistics
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": send slicing complete event to gui with result ID %1%") % m_gcode_result->id;
+		wxCommandEvent evt(m_event_slicing_completed_id);
+		evt.SetInt((int)(m_fff_print->step_state_with_timestamp(PrintStep::psSlicingFinished).timestamp));
+		wxQueueEvent(GUI::wxGetApp().mainframe->m_plater, evt.Clone());
+		
 		if(m_fff_print->is_BBL_printer())
 			run_post_process_scripts(m_temp_output_path, false, "File", m_temp_output_path, m_fff_print->full_print_config());
 

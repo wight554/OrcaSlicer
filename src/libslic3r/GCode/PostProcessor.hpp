@@ -26,6 +26,13 @@ inline bool run_post_process_scripts(std::string &src_path, const DynamicPrintCo
 	return run_post_process_scripts(src_path, false, "File", src_path_name, config);
 }
 
+// Run preview pre-processing scripts if defined.
+// These scripts run after slicing but before the preview is displayed.
+// Returns true if a preview pre-processing script was executed.
+// Returns false if no preview pre-processing script was defined.
+// Throws an exception on error.
+extern bool run_preview_process_scripts(std::string &src_path, const DynamicPrintConfig &config);
+
 // BBS
 extern void gcode_add_line_number(const std::string &path, const DynamicPrintConfig &config);
 

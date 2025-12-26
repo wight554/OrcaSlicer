@@ -10746,12 +10746,16 @@ void Plater::load_gcode(const wxString& filename)
     double total_cost = 0.0;
     for (auto volume : ps.total_volumes_per_extruder) {
         size_t extruder_id = volume.first;
-        double density = current_result->filament_densities.at(extruder_id);
-        double cost = current_result->filament_costs.at(extruder_id);
+        if (extruder_id >= current_result->filament_densities.size() || extruder_id >= current_result->filament_costs.size()) {
+            continue;
+        }
+        double density = current_result->filament_densities[extruder_id];
+        double cost = current_result->filament_costs[extruder_id];
         double weight = volume.second * density * 0.001;
         total_cost += weight * cost * 0.001;
     }
     current_print.print_statistics().total_cost = total_cost;
+    current_print.populate_statistics_from_result(*current_result);
 
     current_print.set_gcode_file_ready();
 

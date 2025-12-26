@@ -2522,6 +2522,13 @@ optgroup->append_single_option_line("skirt_loops", "others_settings_skirt#loops"
         // option.opt.height = 5;
         optgroup->append_single_option_line(option, "others_settings_g_code_output#filename-format");
 
+        optgroup = page->new_optgroup(L("Preview Pre-processing Scripts"), L"param_gcode", 0);
+        option = optgroup->get_option("preview_process");
+        option.opt.full_width = true;
+        option.opt.is_code = true;
+        option.opt.height = 15;
+        optgroup->append_single_option_line(option, "others_settings_preview_processing_scripts");
+
         optgroup = page->new_optgroup(L("Post-processing Scripts"), L"param_gcode", 0);
         option = optgroup->get_option("post_process");
         option.opt.full_width = true;
