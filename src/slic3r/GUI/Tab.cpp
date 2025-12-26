@@ -4227,13 +4227,23 @@ void TabPrinter::extruders_count_changed(size_t extruders_count)
 
 void TabPrinter::append_option_line(ConfigOptionsGroupShp optgroup, const std::string opt_key)
 {
-    auto option = optgroup->get_option(opt_key, 0);
-    auto line = Line{ option.opt.full_label, "" };
+    const ConfigOption *cfg_opt = m_config->option(opt_key);
+    const bool          is_vector = (cfg_opt != nullptr) && cfg_opt->is_vector();
+
+    auto option = optgroup->get_option(opt_key, is_vector ? 0 : -1);
+    auto line   = Line{ option.opt.full_label, "" };
     line.append_option(option);
-    if (m_use_silent_mode
-        || m_printer_technology == ptSLA // just for first build, if SLA printer preset is selected
-        )
+
+    size_t vec_size = 0;
+    if (is_vector)
+        if (const auto *vec_opt = dynamic_cast<const ConfigOptionVectorBase *>(cfg_opt); vec_opt != nullptr)
+            vec_size = vec_opt->size();
+
+    const bool show_secondary_mode = is_vector && vec_size > 1 &&
+        (m_use_silent_mode || m_printer_technology == ptSLA);
+    if (show_secondary_mode)
         line.append_option(optgroup->get_option(opt_key, 1));
+
     optgroup->append_line(line);
 }
 
