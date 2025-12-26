@@ -3605,6 +3605,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def = this->add("klipper_cruise_ratio", coFloat);
+    def->full_label = L("Klipper cruise ratio");
+    def->label = def->full_label;
+    def->category = L("Machine limits");
+    def->tooltip = L("Minimum cruise ratio forwarded to Klipper via SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO.");
+    def->min = 0;
+    def->max = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
     def = this->add("machine_pause_gcode", coString);
     def->label = L("Pause G-code");
     def->tooltip = L("This G-code will be used as a code for the pause print. Users can insert pause G-code in the G-code viewer.");

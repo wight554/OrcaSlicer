@@ -25,7 +25,9 @@ public:
         m_lifted(0),
         m_to_lift(0),
         m_to_lift_type(LiftType::NormalLift),
-        m_current_speed(3600), m_is_first_layer(true)
+        m_current_speed(3600), m_is_first_layer(true),
+        m_last_klipper_cruise_ratio(-1.0),
+        m_klipper_cruise_ratio(0.5)
         {}
     Extruder*            extruder()             { return m_extruder; }
     const Extruder*      extruder()     const   { return m_extruder; }
@@ -139,6 +141,8 @@ public:
     double          m_max_jerk_z;
     double          m_max_jerk_e;
     double          m_max_junction_deviation;
+    double          m_last_klipper_cruise_ratio;
+    double          m_klipper_cruise_ratio;
 
     unsigned int  m_travel_acceleration;
     unsigned int  m_travel_jerk;
@@ -179,6 +183,7 @@ public:
     std::string _spiral_travel_to_z(double z, const Vec2d &ij_offset, const std::string &comment);
     std::string _retract(double length, double restart_extra, const std::string &comment);
     std::string set_acceleration_internal(Acceleration type, unsigned int acceleration);
+    std::string klipper_cruise_ratio_token();
 
 };
 

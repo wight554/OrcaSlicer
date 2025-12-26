@@ -2,6 +2,9 @@
 
 ## Goal
 Extend the existing time-estimation planner inside `GCodeProcessor` so it can calculate Klipper-aware entry/exit/peak speeds per move, honoring square-corner velocity (SCV), acceleration limits, and the new cruise ratio constraint. Persist these kinematic results so later stages (preview/UI) can consume them.
+## Clarifications
+- Orca don't have parameters named Square Corner Velocity, however for Klipper machines parameters specified in Jerk are used as Square Corner Velocity, so there is no need to implement separate Square Corner Velocity paramters - Jerk options for corresponding extrusion types should be used.
+- Thus everywhere SCV is mentioned - it should be read as Jerk.
 
 ## Work Items
 1. **Data Structures**
@@ -9,8 +12,7 @@ Extend the existing time-estimation planner inside `GCodeProcessor` so it can ca
    - Ensure `reset()`/copy logic in `GCodeViewer` respects the new fields.
 
 2. **SCV Tracking**
-   - Introduce `machine_square_corner_velocity` storage on `MachineEnvelopeConfig` (or reuse the parsed `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY` value explicitly instead of overloading jerk).
-   - Whenever parser sees `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=...`, store it; otherwise use printer preset defaults. Provide helper `current_scv(mode)` for planner use.
+   - Whenever parser sees `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=...`, store it; otherwise - this is very unrealistic, but use the default value of 5. Provide helper `current_scv(mode)` for planner use.
 
 3. **Cruise Ratio Constraint**
    - Add `float cruise_ratio` to `TimeBlock` plus convenience helpers (e.g., `bool has_cruise_ratio()`).
@@ -33,16 +35,14 @@ Extend the existing time-estimation planner inside `GCodeProcessor` so it can ca
    - Handle zero-length moves, pure E-only retractions, spiral vase mode, prepare-stage moves (should probably mark limiter as `Prepare` so preview can optionally hide them).
    - Ensure first move (the dummy vertex) stays zeroed.
 
-8. **Testing Hooks**
-   - Add unit coverage in `tests/libslic3r` that feeds synthetic G-code into `GCodeProcessor` and inspects the new kinematic data for known cases (straight line at low accel, 90° corner with SCV cap, short segment hitting cruise ratio).
-   - Document manual regression steps (compare planner output with Klipper `QUERY_PRINT_STATS` on a small file if possible).
+8. **Docs**
+   - Add a detailed summary of what was done in `doc/klipper_actual_speed/implementation/...` so this can be used by a future developer of dependent features.
 
 ## Dependencies / Open Questions
 - Need a stable mapping from `g1_line_id` to move indices; verify `m_sequential_view.gcode_ids` already reflects this or build a dedicated map.
-- Decide how to treat Z-only moves (probably ignore for actual speed legend to avoid noise).
+- Ignore Z-only moves.
 
 ## Acceptance Criteria
 - For Klipper flavor, every move now has actual entry/exit/peak speeds that reflect SCV + cruise ratio.
 - For other flavors, existing timing results remain unchanged (the new fields default to requested speeds).
-- Unit test demonstrates at least one scenario where actual speed differs from requested.
 

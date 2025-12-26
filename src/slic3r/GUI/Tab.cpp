@@ -4266,6 +4266,7 @@ PageShp TabPrinter::build_kinematics_page()
     }
     auto optgroup = page->new_optgroup(L("Advanced"), "param_advanced");
     optgroup->append_single_option_line("emit_machine_limits_to_gcode");
+    append_option_line(optgroup, "klipper_cruise_ratio");
 
     // resonance avoidance ported over from qidi slicer
     optgroup = page->new_optgroup(L("Resonance Avoidance"), "param_resonance_avoidance");
@@ -4819,6 +4820,11 @@ void TabPrinter::toggle_options()
         for (int i = 0; i < max_field; ++i)
             toggle_option("machine_max_junction_deviation", gcf == gcfMarlinFirmware, i);
         toggle_line("machine_max_junction_deviation", gcf == gcfMarlinFirmware);
+
+        bool show_klipper_ratio = (gcf == gcfKlipper);
+        for (int i = 0; i < max_field; ++i)
+            toggle_option("klipper_cruise_ratio", show_klipper_ratio, i);
+        toggle_line("klipper_cruise_ratio", show_klipper_ratio);
 
         bool resonance_avoidance = m_config->opt_bool("resonance_avoidance");
         toggle_option("min_resonance_avoidance_speed", resonance_avoidance);

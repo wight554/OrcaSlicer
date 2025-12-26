@@ -25,8 +25,9 @@ Introduce a printer-level `klipper_cruise_ratio` setting (default 0.50) that is 
    - Feed the stored ratio into `TimeMachine` (prepare to read it from `MachineEnvelopeConfig`, probably via a helper similar to `get_option_value`).
    - Ensure the ratio is serialized/deserialized in 3MF/project configs (verify no hard-coded allowlists need to be updated; if they do, touch `PresetBundle::printer_options()` and related doc comments).
 
-6. **Docs**
-   - Add document to `doc/klipper_actual_speed/...` describing the technical side of whay you've done to be used by another developers for next tasks of this feature. If any further updates within this task - update this document to be actual and relevant.
+6. **Docs & Validation**
+   - Add a short blurb to `doc/print_settings/speed/...` (or a new printer-settings page) describing what the cruise ratio controls.
+   - Manual test: switch value, export 3MF, re-import, inspect generated G-code for `MINIMUM_CRUISE_RATIO`.
 
 ## Dependencies / Open Questions
 - Confirm whether `MachineEnvelopeConfig` currently round-trips every option automatically; if not, extend serialization helpers.

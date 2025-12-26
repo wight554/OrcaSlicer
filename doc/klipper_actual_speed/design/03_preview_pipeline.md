@@ -2,7 +2,9 @@
 
 ## Goal
 Expose the computed actual-speed information to the preview renderer so each toolpath vertex (and any interpolated tessellation point) carries both requested and achievable velocities. Update range tracking/state so the new legend tab can scale colors correctly.
-
+## Clarifications
+- Orca don't have parameters named Square Corner Velocity, however for Klipper machines parameters specified in Jerk are used as Square Corner Velocity, so there is no need to implement separate Square Corner Velocity paramters - Jerk options for corresponding extrusion types should be used.
+- Thus everywhere SCV is mentioned - it should be read as Jerk.
 ## Work Items
 1. **Result Struct Updates**
    - Extend `GCodeProcessorResult::MoveVertex` with fields such as `actual_entry_speed`, `actual_exit_speed`, `actual_peak_speed`, `limiting_factor`, and optionally `trapezoid_accel_mm`, `trapezoid_cruise_mm` for downstream sampling.
@@ -32,14 +34,13 @@ Expose the computed actual-speed information to the preview renderer so each too
 7. **Performance & Memory**
    - Audit GPU upload paths to ensure the added float(s) keep buffers aligned (PositionNormal3 becomes PositionNormal3Speed?).
    - If GPU attribute limits become an issue, we can store actual speed in the per-path CPU data and assign colors on the CPU—call this out as an implementation decision point.
+8. **Docs**
+   - Add a detailed summary of what was done in `doc/klipper_actual_speed/implementation/...` so this can be used by a future developer of dependent features.
 
-8. **Testing**
-   - Load a simple file, toggle to the new view mode (implemented in Subtask 4) and verify the range map matches the backend numbers (e.g., known slowdowns near sharp turns).
-   - Include regression coverage for multi-plate / multi-extruder files to ensure ranges reset properly when reloading.
 
 ## Dependencies / Open Questions
 - Coordination with Subtask 2 on what exact data is exposed (entry/exit vs per-sample). Adjust helper signatures accordingly.
-- Need to confirm whether we also want to expose actual speeds for travel moves or only extrusion paths (spec implies both).
+- Need to confirm whether we also want to expose actual speeds for travel moves or only extrusion paths - both.
 
 ## Acceptance Criteria
 - For each move, preview buffers carry accurate actual-speed metadata.

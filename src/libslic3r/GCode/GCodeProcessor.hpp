@@ -9,11 +9,13 @@
 
 #include <cstdint>
 #include <array>
+#include <cmath>
 #include <vector>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <optional>
+#include <unordered_map>
 
 namespace Slic3r {
 
@@ -174,6 +176,39 @@ class Print;
             Vec3f arc_center_position{ Vec3f::Zero() };      // mm
             std::vector<Vec3f> interpolation_points;     // interpolation points of arc for drawing
 
+            enum class LimitingFactor : unsigned char
+            {
+                Requested,
+                Acceleration,
+                SCV,
+                CruiseRatio,
+                Lookahead,
+                Prepare
+            };
+
+            struct Kinematics
+            {
+                float requested_speed{ 0.0f };     // mm/s
+                float entry_speed{ 0.0f };         // mm/s
+                float exit_speed{ 0.0f };          // mm/s
+                float peak_speed{ 0.0f };          // mm/s
+                float accelerate_distance{ 0.0f }; // mm
+                float cruise_distance{ 0.0f };     // mm
+                float decelerate_distance{ 0.0f }; // mm
+                LimitingFactor limiting_factor{ LimitingFactor::Requested };
+                bool has_kinematics{ false };
+                enum class Phase : unsigned char
+                {
+                    Unknown,
+                    Acceleration,
+                    Cruise,
+                    Deceleration
+                };
+                Phase phase{ Phase::Unknown };
+            };
+
+            Kinematics kinematics;
+
             float volumetric_rate() const { return feedrate * mm3_per_mm; }
             //BBS: new function to support arc move
             bool is_arc_move_with_interpolation_points() const {
@@ -181,6 +216,48 @@ class Print;
             }
             bool is_arc_move() const {
                 return move_path_type == EMovePathType::Arc_move_ccw || move_path_type == EMovePathType::Arc_move_cw;
+            }
+            float requested_speed() const {
+                return (kinematics.requested_speed > 0.0f) ? kinematics.requested_speed : feedrate;
+            }
+            float actual_entry_speed() const {
+                return kinematics.has_kinematics ? kinematics.entry_speed : requested_speed();
+            }
+            float actual_exit_speed() const {
+                return kinematics.has_kinematics ? kinematics.exit_speed : requested_speed();
+            }
+            float actual_peak_speed() const {
+                return kinematics.has_kinematics ? kinematics.peak_speed : requested_speed();
+            }
+            float actual_speed_at(float distance_along) const {
+                const float total = std::max(travel_dist, 0.0f);
+                if (total <= 0.0f)
+                    return actual_peak_speed();
+
+                const float distance = std::clamp(distance_along, 0.0f, total);
+                if (!kinematics.has_kinematics)
+                    return actual_peak_speed();
+
+                auto solve_speed = [](float v0, float v1, float length, float d) -> float {
+                    constexpr float kMinLength = 1e-6f;
+                    const float segment = std::max(length, kMinLength);
+                    const float accel = (v1 * v1 - v0 * v0) / (2.0f * segment);
+                    const float clamped_dist = std::clamp(d, 0.0f, segment);
+                    const float value_sq = v0 * v0 + 2.0f * accel * clamped_dist;
+                    return std::sqrt(std::max(0.0f, value_sq));
+                };
+
+                const float accel_len = std::max(0.0f, kinematics.accelerate_distance);
+                const float cruise_len = std::max(0.0f, kinematics.cruise_distance);
+                const float decel_len = std::max(0.0f, kinematics.decelerate_distance);
+                const float accel_end = accel_len;
+                const float decel_start = total - decel_len;
+
+                if (distance <= accel_end)
+                    return solve_speed(actual_entry_speed(), actual_peak_speed(), accel_len, distance);
+                if (distance < decel_start)
+                    return actual_peak_speed();
+                return solve_speed(actual_peak_speed(), actual_exit_speed(), decel_len, distance - decel_start);
             }
         };
 
@@ -387,12 +464,19 @@ class Print;
             float acceleration{ 0.0f }; // mm/s^2
             float max_entry_speed{ 0.0f }; // mm/s
             float safe_feedrate{ 0.0f }; // mm/s
+            float cruise_ratio{ 0.0f };
+            float requested_feedrate{ 0.0f }; // mm/s
+            bool scv_limited{ false };
+            bool lookahead_limited{ false };
+            bool cruise_ratio_applied{ false };
+            bool has_xy_motion{ false };
             Flags flags;
             FeedrateProfile feedrate_profile;
             Trapezoid trapezoid;
 
             // Calculates this block's trapezoid
             void calculate_trapezoid();
+            bool has_cruise_ratio() const { return cruise_ratio > 0.0f; }
 
             float time() const;
         };
@@ -444,8 +528,14 @@ class Print;
             float travel_acceleration; // mm/s^2
             // hard limit for the travel acceleration, to which the firmware will clamp.
             float max_travel_acceleration; // mm/s^2
+            float minimum_cruise_ratio;
             float extrude_factor_override_percentage;
             float time; // s
+            float square_corner_velocity{ 5.0f }; // mm/s
+            GCodeProcessor* owner{ nullptr };
+            bool klipper_mode{ false };
+            bool collect_kinematics{ false };
+            PrintEstimatedStatistics::ETimeMode time_mode{ PrintEstimatedStatistics::ETimeMode::Normal };
             struct StopTime
             {
                 unsigned int g1_line_id;
@@ -726,6 +816,7 @@ class Print;
         CpColor m_cp_color;
         SeamsDetector m_seams_detector;
         OptionsZCorrector m_options_z_corrector;
+        std::unordered_map<unsigned int, std::pair<size_t, size_t>> m_g1_to_move_range;
         size_t m_last_default_color_id;
         bool m_detect_layer_based_on_tag {false};
         int m_seams_count;
@@ -951,6 +1042,9 @@ class Print;
 
         //BBS: different path_type is only used for arc move
         void store_move_vertex(EMoveType type, EMovePathType path_type = EMovePathType::Noop_move);
+        void register_g1_move(unsigned int g1_line_id);
+        void record_block_kinematics(const TimeBlock& block, PrintEstimatedStatistics::ETimeMode mode);
+        void update_time_machine_modes();
 
         void set_extrusion_role(ExtrusionRole role);
 
@@ -971,6 +1065,7 @@ class Print;
         int   get_filament_vitrification_temperature(size_t extrude_id);
         void process_custom_gcode_time(CustomGCode::Type code);
         void process_filaments(CustomGCode::Type code);
+        float current_scv(PrintEstimatedStatistics::ETimeMode mode) const;
 
         // Simulates firmware st_synchronize() call
         void simulate_st_synchronize(float additional_time = 0.0f);

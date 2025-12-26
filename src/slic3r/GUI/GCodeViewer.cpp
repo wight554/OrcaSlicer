@@ -38,6 +38,8 @@
 
 #include <array>
 #include <algorithm>
+#include <cmath>
+#include <tuple>
 #include <chrono>
 
 namespace Slic3r {
@@ -66,6 +68,8 @@ static std::string get_view_type_string(GCodeViewer::EViewType view_type)
         return _u8L("Line Width");
     else if (view_type == GCodeViewer::EViewType::Feedrate)
         return _u8L("Speed");
+else if (view_type == GCodeViewer::EViewType::ActualSpeed)
+    return _u8L("Actual Speed");
     else if (view_type == GCodeViewer::EViewType::FanSpeed)
         return _u8L("Fan Speed");
     else if (view_type == GCodeViewer::EViewType::Temperature)
@@ -87,6 +91,9 @@ static unsigned char buffer_id(EMoveType type) {
     return static_cast<unsigned char>(type) - static_cast<unsigned char>(EMoveType::Retract);
 }
 
+static constexpr float kActualSpeedPreviewMaxChunk = 1.0f; // mm
+static constexpr float kPreviewDistanceEps = 1e-4f;
+
 static EMoveType buffer_type(unsigned char id) {
     return static_cast<EMoveType>(static_cast<unsigned char>(EMoveType::Retract) + id);
 }
@@ -104,6 +111,11 @@ static float round_to_bin(const float value)
     // While the scaling factor is not yet large enough to get two integer digits after scaling and rounding:
     for (; value < threshold[i] && i < 4; ++ i) ;
     return std::round(value * scale[i]) * invscale[i];
+}
+
+static float actual_speed_for_move(const GCodeProcessorResult::MoveVertex& move)
+{
+    return move.actual_peak_speed();
 }
 
 // Find an index of a value in a sorted vector, which is in <z-eps, z+eps>.
@@ -176,6 +188,10 @@ bool GCodeViewer::Path::matches(const GCodeProcessorResult::MoveVertex& move) co
     auto matches_percent = [](float value1, float value2, float max_percent) {
         return std::abs(value2 - value1) / value1 <= max_percent;
     };
+    auto matches_actual_speed = [](float current_speed, float move_speed) {
+        const float base = std::max(std::abs(current_speed), 1e-3f);
+        return std::abs(move_speed - current_speed) <= 0.05f * base;
+    };
 
     switch (move.type)
     {
@@ -191,10 +207,12 @@ bool GCodeViewer::Path::matches(const GCodeProcessorResult::MoveVertex& move) co
         return type == move.type && extruder_id == move.extruder_id && cp_color_id == move.cp_color_id && role == move.extrusion_role &&
             move.position.z() <= sub_paths.front().first.position.z() && feedrate == move.feedrate && fan_speed == move.fan_speed &&
             height == round_to_bin(move.height) && width == round_to_bin(move.width) &&
-            matches_percent(volumetric_rate, move.volumetric_rate(), 0.05f) && layer_time == move.layer_duration;
+            matches_percent(volumetric_rate, move.volumetric_rate(), 0.05f) && layer_time == move.layer_duration &&
+            matches_actual_speed(actual_speed, actual_speed_for_move(move));
     }
     case EMoveType::Travel: {
-        return type == move.type && feedrate == move.feedrate && extruder_id == move.extruder_id && cp_color_id == move.cp_color_id;
+        return type == move.type && feedrate == move.feedrate && extruder_id == move.extruder_id && cp_color_id == move.cp_color_id &&
+            matches_actual_speed(actual_speed, actual_speed_for_move(move));
     }
     default: { return false; }
     }
@@ -224,7 +242,7 @@ void GCodeViewer::TBuffer::add_path(const GCodeProcessorResult::MoveVertex& move
     // use rounding to reduce the number of generated paths
     paths.push_back({ move.type, move.extrusion_role, move.delta_extruder,
         round_to_bin(move.height), round_to_bin(move.width),
-        move.feedrate, move.fan_speed, move.temperature,
+        move.feedrate, actual_speed_for_move(move), move.fan_speed, move.temperature,
         move.volumetric_rate(), move.layer_duration, move.extruder_id, move.cp_color_id, { { endpoint, endpoint } } });
 }
 
@@ -357,7 +375,10 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
     std::string z = ImGui::ColorMarkerStart + std::string("Z: ") + ImGui::ColorMarkerEnd;
     std::string height = ImGui::ColorMarkerStart + _u8L("Height: ") + ImGui::ColorMarkerEnd;
     std::string width = ImGui::ColorMarkerStart + _u8L("Width: ") + ImGui::ColorMarkerEnd;
-    std::string speed = ImGui::ColorMarkerStart + _u8L("Speed: ") + ImGui::ColorMarkerEnd;
+    std::string speed = ImGui::ColorMarkerStart + _u8L("Requested Speed: ") + ImGui::ColorMarkerEnd;
+    std::string actual_speed = ImGui::ColorMarkerStart + _u8L("Actual: ") + ImGui::ColorMarkerEnd;
+    std::string phase = ImGui::ColorMarkerStart + _u8L("Phase: ") + ImGui::ColorMarkerEnd;
+    std::string limiter = ImGui::ColorMarkerStart + _u8L("Limited by: ") + ImGui::ColorMarkerEnd;
     std::string flow = ImGui::ColorMarkerStart + _u8L("Flow: ") + ImGui::ColorMarkerEnd;
     std::string layer_time = ImGui::ColorMarkerStart + _u8L("Layer Time: ") + ImGui::ColorMarkerEnd;
     std::string fanspeed = ImGui::ColorMarkerStart + _u8L("Fan: ") + ImGui::ColorMarkerEnd;
@@ -386,6 +407,37 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         imgui.text(buf);
 
         sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        auto phase_label = [this]() {
+            using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+            switch (m_curr_move.kinematics.phase)
+            {
+            case Phase::Acceleration: return _u8L("Acceleration");
+            case Phase::Cruise: return _u8L("Cruise");
+            case Phase::Deceleration: return _u8L("Deceleration");
+            default: return _u8L("Unknown");
+            }
+        }();
+        auto limiter_label = [this]() {
+            using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
+            switch (m_curr_move.kinematics.limiting_factor)
+            {
+            case Limiter::Acceleration: return _u8L("Limited by Acceleration");
+            case Limiter::SCV: return _u8L("Limited by SCV");
+            case Limiter::CruiseRatio: return _u8L("Limited by Cruise Ratio");
+            case Limiter::Lookahead: return _u8L("Limited by Lookahead");
+            case Limiter::Prepare: return _u8L("Limited by Prepare Stage");
+            default: return _u8L("Limited by Request");
+            }
+        }();
+        sprintf(buf, "%s%s", phase.c_str(), phase_label.c_str());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        sprintf(buf, "%s%s", limiter.c_str(), limiter_label.c_str());
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
 
@@ -894,6 +946,7 @@ void GCodeViewer::update_by_mode(ConfigOptionMode mode)
     view_type_items.push_back(EViewType::FeatureType);
     view_type_items.push_back(EViewType::ColorPrint);
     view_type_items.push_back(EViewType::Feedrate);
+    view_type_items.push_back(EViewType::ActualSpeed);
     view_type_items.push_back(EViewType::Height);
     view_type_items.push_back(EViewType::Width);
     view_type_items.push_back(EViewType::VolumetricRate);
@@ -969,7 +1022,9 @@ void GCodeViewer::load(const GCodeProcessorResult& gcode_result, const Print& pr
 
     m_max_print_height = gcode_result.printable_height;
 
-    load_toolpaths(gcode_result, build_volume, exclude_bounding_box);
+    rebuild_preview_moves(gcode_result);
+
+    load_toolpaths(gcode_result, m_preview_moves.empty() ? gcode_result.moves : m_preview_moves, build_volume, exclude_bounding_box);
 
     //BBS: add mutex for protection of gcode result
     if (m_layers.empty()) {
@@ -1077,6 +1132,140 @@ void GCodeViewer::load(const GCodeProcessorResult& gcode_result, const Print& pr
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": finished, m_buffers size %1%!")%m_buffers.size();
 }
 
+void GCodeViewer::rebuild_preview_moves(const GCodeProcessorResult& gcode_result)
+{
+    m_preview_moves.clear();
+    m_preview_moves_ready = false;
+
+    const auto& source_moves = gcode_result.moves;
+    if (source_moves.empty())
+        return;
+
+    m_preview_moves.reserve(source_moves.size());
+    m_preview_moves.push_back(source_moves.front());
+
+    for (size_t i = 1; i < source_moves.size(); ++i) {
+        const auto& move = source_moves[i];
+        const bool eligible =
+            (move.type == EMoveType::Extrude || move.type == EMoveType::Travel) &&
+            move.kinematics.has_kinematics &&
+            !move.is_arc_move_with_interpolation_points() &&
+            move.travel_dist > kActualSpeedPreviewMaxChunk + kPreviewDistanceEps;
+
+        if (eligible)
+            append_segmented_move(move, m_preview_moves.back().position);
+        else
+            m_preview_moves.push_back(move);
+    }
+
+    m_preview_moves_ready = true;
+}
+
+void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& move, Vec3f start_position)
+{
+    const float total_length = std::max(move.travel_dist, 0.0f);
+    if (total_length <= kActualSpeedPreviewMaxChunk || !std::isfinite(total_length)) {
+        m_preview_moves.push_back(move);
+        return;
+    }
+
+    const Vec3f delta = move.position - start_position;
+    std::vector<float> boundaries;
+    boundaries.reserve(6);
+    boundaries.push_back(0.0f);
+    boundaries.push_back(total_length);
+
+    if (move.kinematics.has_kinematics) {
+        const float accel = std::clamp(move.kinematics.accelerate_distance, 0.0f, total_length);
+        const float cruise = std::clamp(move.kinematics.cruise_distance, 0.0f, total_length);
+        const float decel = std::clamp(move.kinematics.decelerate_distance, 0.0f, total_length);
+        const float accel_end = accel;
+        const float cruise_end = std::min(total_length, accel + cruise);
+        const float decel_start = std::max(0.0f, total_length - decel);
+        auto push_boundary = [&](float value) {
+            if (value > kPreviewDistanceEps && value < total_length - kPreviewDistanceEps)
+                boundaries.push_back(value);
+        };
+        push_boundary(accel_end);
+        push_boundary(cruise_end);
+        push_boundary(decel_start);
+    }
+
+    std::sort(boundaries.begin(), boundaries.end());
+    boundaries.erase(std::unique(boundaries.begin(), boundaries.end(), [](float lhs, float rhs) {
+        return std::abs(lhs - rhs) < kPreviewDistanceEps;
+    }), boundaries.end());
+
+    const auto chunk_flags = [&](float start, float end) {
+        const float accel_end = std::clamp(move.kinematics.accelerate_distance, 0.0f, total_length);
+        const float decel_start = std::max(0.0f, total_length - std::clamp(move.kinematics.decelerate_distance, 0.0f, total_length));
+        const bool in_accel = end <= accel_end + kPreviewDistanceEps;
+        const bool in_decel = start >= decel_start - kPreviewDistanceEps;
+        const bool in_cruise = !in_accel && !in_decel;
+        return std::tuple<bool, bool, bool>(in_accel, in_cruise, in_decel);
+    };
+
+    for (size_t boundary_idx = 1; boundary_idx < boundaries.size(); ++boundary_idx) {
+        float phase_start = boundaries[boundary_idx - 1];
+        float phase_end = boundaries[boundary_idx];
+        if (phase_end - phase_start <= kPreviewDistanceEps)
+            continue;
+
+        float cursor = phase_start;
+        while (cursor + kPreviewDistanceEps < phase_end) {
+            const float chunk_end = std::min(phase_end, cursor + kActualSpeedPreviewMaxChunk);
+            const float chunk_length = chunk_end - cursor;
+            if (chunk_length <= kPreviewDistanceEps) {
+                cursor = chunk_end;
+                continue;
+            }
+
+            GCodeProcessorResult::MoveVertex chunk = move;
+            const float ratio = std::clamp(chunk_length / total_length, 0.0f, 1.0f);
+            chunk.delta_extruder = move.delta_extruder * ratio;
+            chunk.time = move.time * ratio;
+            chunk.layer_duration = move.layer_duration * ratio;
+            chunk.travel_dist = chunk_length;
+
+            const float normalized_end = chunk_end / total_length;
+            chunk.position = start_position + delta * normalized_end;
+            chunk.interpolation_points.clear();
+
+            if (move.kinematics.has_kinematics) {
+                const float entry_speed = move.actual_speed_at(cursor);
+                const float exit_speed = move.actual_speed_at(chunk_end);
+                const float peak_speed = move.actual_speed_at(cursor + 0.5f * chunk_length);
+                chunk.kinematics.entry_speed = entry_speed;
+                chunk.kinematics.exit_speed = exit_speed;
+                chunk.kinematics.peak_speed = peak_speed;
+                const auto [in_accel, in_cruise, in_decel] = chunk_flags(cursor, chunk_end);
+                chunk.kinematics.accelerate_distance = in_accel ? chunk_length : 0.0f;
+                chunk.kinematics.cruise_distance = in_cruise ? chunk_length : 0.0f;
+                chunk.kinematics.decelerate_distance = in_decel ? chunk_length : 0.0f;
+                using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+                if (in_accel)
+                    chunk.kinematics.phase = Phase::Acceleration;
+                else if (in_decel)
+                    chunk.kinematics.phase = Phase::Deceleration;
+                else if (in_cruise)
+                    chunk.kinematics.phase = Phase::Cruise;
+                else
+                    chunk.kinematics.phase = Phase::Unknown;
+            }
+
+            m_preview_moves.push_back(std::move(chunk));
+            cursor = chunk_end;
+        }
+    }
+}
+
+const GCodeProcessorResult::MoveVertex& GCodeViewer::render_move_at(size_t idx) const
+{
+    if (!m_preview_moves.empty())
+        return m_preview_moves[idx];
+    return m_gcode_result->moves[idx];
+}
+
 void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::vector<std::string>& str_tool_colors)
 {
 #if ENABLE_GCODE_VIEWER_STATISTICS
@@ -1100,6 +1289,9 @@ void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::v
         gcode_result.unlock();
         return;
     }
+
+    const auto& moves = m_preview_moves.empty() ? gcode_result.moves : m_preview_moves;
+    const size_t moves_count = moves.size();
 
     wxBusyCursor busy;
 
@@ -1129,12 +1321,19 @@ void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::v
 
     // update ranges for coloring / legend
     m_extrusions.reset_ranges();
-    for (size_t i = 0; i < m_moves_count; ++i) {
+    for (size_t i = 0; i < moves_count; ++i) {
         // skip first vertex
         if (i == 0)
             continue;
 
-        const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& curr = moves[i];
+        const bool is_travel_or_extrude = (curr.type == EMoveType::Extrude || curr.type == EMoveType::Travel);
+        if (is_travel_or_extrude) {
+            const float actual_speed = actual_speed_for_move(curr);
+            const unsigned char id = buffer_id(curr.type);
+            if (id < m_buffers.size() && m_buffers[id].visible)
+                m_extrusions.ranges.actual_speed.update_from(actual_speed);
+        }
 
         switch (curr.type)
         {
@@ -1233,6 +1432,12 @@ void GCodeViewer::reset()
     m_print_statistics.reset();
     m_custom_gcode_per_print_z = std::vector<CustomGCode::Item>();
     m_sequential_view.gcode_window.reset();
+    m_sequential_view.gcode_ids.clear();
+    m_sequential_view.gcode_ids.shrink_to_fit();
+    m_sequential_view.actual_speeds.clear();
+    m_sequential_view.actual_speeds.shrink_to_fit();
+    m_preview_moves.clear();
+    m_preview_moves_ready = false;
 #if ENABLE_GCODE_VIEWER_STATISTICS
     m_statistics.reset_all();
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
@@ -1786,6 +1991,13 @@ void GCodeViewer::update_layers_slider_mode()
 
 void GCodeViewer::update_marker_curr_move() {
     if ((int)m_last_result_id != -1) {
+        if (!m_ssid_to_moveid_map.empty() && m_sequential_view.current.last < m_ssid_to_moveid_map.size()) {
+            size_t move_idx = m_ssid_to_moveid_map[m_sequential_view.current.last];
+            if (move_idx < m_moves_count) {
+                m_sequential_view.marker.update_curr_move(render_move_at(move_idx));
+                return;
+            }
+        }
         auto it = std::find_if(m_gcode_result->moves.begin(), m_gcode_result->moves.end(), [this](auto move) {
                 if (m_sequential_view.current.last < m_sequential_view.gcode_ids.size() && m_sequential_view.current.last >= 0) {
                     return move.gcode_id == static_cast<uint64_t>(m_sequential_view.gcode_ids[m_sequential_view.current.last]);
@@ -2011,7 +2223,9 @@ void GCodeViewer::export_toolpaths_to_obj(const char* filename) const
     fclose(fp);
 }
 
-void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box)
+void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result,
+    const std::vector<GCodeProcessorResult::MoveVertex>& preview_moves,
+    const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box)
 {
     // max index buffer size, in bytes
     static const size_t IBUFFER_THRESHOLD_BYTES = 64 * 1024 * 1024;
@@ -2034,6 +2248,8 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         }
         log_memory_used(label, vertices_size + indices_size);
     };
+
+    const std::vector<GCodeProcessorResult::MoveVertex>& moves = preview_moves.empty() ? gcode_result.moves : preview_moves;
 
     // format data into the buffers to be rendered as lines
     auto add_vertices_as_line = [](const GCodeProcessorResult::MoveVertex& prev, const GCodeProcessorResult::MoveVertex& curr, VertexBuffer& vertices) {
@@ -2329,11 +2545,11 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
 #if ENABLE_GCODE_VIEWER_STATISTICS
     auto start_time = std::chrono::high_resolution_clock::now();
-    m_statistics.results_size = SLIC3R_STDVEC_MEMSIZE(gcode_result.moves, GCodeProcessorResult::MoveVertex);
+    m_statistics.results_size = SLIC3R_STDVEC_MEMSIZE(moves, GCodeProcessorResult::MoveVertex);
     m_statistics.results_time = gcode_result.time;
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
 
-    m_moves_count = gcode_result.moves.size();
+    m_moves_count = moves.size();
     if (m_moves_count == 0)
         return;
 
@@ -2353,7 +2569,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
     // extract approximate paths bounding box from result
     //BBS: add only gcode mode
-    for (const GCodeProcessorResult::MoveVertex& move : gcode_result.moves) {
+    for (const GCodeProcessorResult::MoveVertex& move : moves) {
         //if (wxGetApp().is_gcode_viewer()) {
         //if (m_only_gcode_in_preview) {
             // for the gcode viewer we need to take in account all moves to correctly size the printbed
@@ -2369,7 +2585,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     }
 
     // BBS: also merge the point on arc to bounding box
-    for (const GCodeProcessorResult::MoveVertex& move : gcode_result.moves) {
+    for (const GCodeProcessorResult::MoveVertex& move : moves) {
         // continue if not arc path
         if (!move.is_arc_move_with_interpolation_points())
             continue;
@@ -2422,10 +2638,13 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     }
 
     m_sequential_view.gcode_ids.clear();
-    for (size_t i = 0; i < gcode_result.moves.size(); ++i) {
-        const GCodeProcessorResult::MoveVertex& move = gcode_result.moves[i];
+    m_sequential_view.actual_speeds.clear();
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const GCodeProcessorResult::MoveVertex& move = moves[i];
         if (move.type != EMoveType::Seam)
             m_sequential_view.gcode_ids.push_back(move.gcode_id);
+        if (move.type != EMoveType::Seam)
+            m_sequential_view.actual_speeds.push_back(actual_speed_for_move(move));
     }
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(",m_contained_in_bed %1%\n")%m_contained_in_bed;
 
@@ -2441,7 +2660,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
     // toolpaths data -> extract vertices from result
     for (size_t i = 0; i < m_moves_count; ++i) {
-        const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& curr = moves[i];
         if (curr.type == EMoveType::Seam) {
             ++seams_count;
             biased_seams_ids.push_back(i - biased_seams_ids.size() - 1);
@@ -2453,7 +2672,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         if (i == 0)
             continue;
 
-        const GCodeProcessorResult::MoveVertex& prev = gcode_result.moves[i - 1];
+        const GCodeProcessorResult::MoveVertex& prev = moves[i - 1];
 
         // update progress dialog
         ++progress_count;
@@ -2553,7 +2772,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         m_ssid_to_moveid_map.push_back(extract_move_id(i));
 
     //BBS: smooth toolpaths corners for the given TBuffer using triangles
-    auto smooth_triangle_toolpaths_corners = [&gcode_result, this](const TBuffer& t_buffer, MultiVertexBuffer& v_multibuffer) {
+    auto smooth_triangle_toolpaths_corners = [&gcode_result, this, &moves](const TBuffer& t_buffer, MultiVertexBuffer& v_multibuffer) {
         auto extract_position_at = [](const VertexBuffer& vertices, size_t offset) {
             return Vec3f(vertices[offset + 0], vertices[offset + 1], vertices[offset + 2]);
         };
@@ -2570,11 +2789,11 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
                 size_t temp_offset = prev_sub_path.last.s_id - curr_s_id;
                 for (size_t i = prev_sub_path.last.s_id; i > curr_s_id; i--) {
                     size_t move_id = m_ssid_to_moveid_map[i];
-                    temp_offset += (gcode_result.moves[move_id].is_arc_move() ? gcode_result.moves[move_id].interpolation_points.size() : 0);
+                    temp_offset += (moves[move_id].is_arc_move() ? moves[move_id].interpolation_points.size() : 0);
                 }
                 if (is_internal_point) {
                     size_t move_id = m_ssid_to_moveid_map[curr_s_id];
-                    temp_offset += (gcode_result.moves[move_id].interpolation_points.size() - interpolation_point_id);
+                    temp_offset += (moves[move_id].interpolation_points.size() - interpolation_point_id);
                 }
                 const size_t next_1st_offset = temp_offset * 6 * vertex_size_floats;
                 // offset into the vertex buffer of the right vertex of the previous segment
@@ -2612,11 +2831,11 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
                 size_t temp_offset = prev_sub_path.last.s_id - curr_s_id;
                 for (size_t i = prev_sub_path.last.s_id; i > curr_s_id; i--) {
                     size_t move_id = m_ssid_to_moveid_map[i];
-                    temp_offset += (gcode_result.moves[move_id].is_arc_move() ? gcode_result.moves[move_id].interpolation_points.size() : 0);
+                    temp_offset += (moves[move_id].is_arc_move() ? moves[move_id].interpolation_points.size() : 0);
                 }
                 if (is_internal_point) {
                     size_t move_id = m_ssid_to_moveid_map[curr_s_id];
-                    temp_offset += (gcode_result.moves[move_id].interpolation_points.size() - interpolation_point_id);
+                    temp_offset += (moves[move_id].interpolation_points.size() - interpolation_point_id);
                 }
                 const size_t next_1st_offset = temp_offset * 6 * vertex_size_floats;
                 // offset into the vertex buffer of the left vertex of the previous segment
@@ -2658,14 +2877,14 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
             for (size_t j = 1; j < path_vertices_count; ++j) {
                 size_t curr_s_id = path.sub_paths.front().first.s_id + j;
                 size_t move_id = m_ssid_to_moveid_map[curr_s_id];
-                int interpolation_points_num = gcode_result.moves[move_id].is_arc_move_with_interpolation_points()?
-                                                    gcode_result.moves[move_id].interpolation_points.size() : 0;
+                int interpolation_points_num = moves[move_id].is_arc_move_with_interpolation_points()?
+                                                    moves[move_id].interpolation_points.size() : 0;
                 int loop_num = interpolation_points_num;
                 //BBS: select the subpaths which contains the previous/next segments
                 if (!path.sub_paths[prev_sub_path_id].contains(curr_s_id))
                     ++prev_sub_path_id;
                 if (j == path_vertices_count - 1) {
-                    if (!gcode_result.moves[move_id].is_arc_move_with_interpolation_points())
+                    if (!moves[move_id].is_arc_move_with_interpolation_points())
                         break;   // BBS: the last move has no internal point.
                     loop_num--;  //BBS: don't need to handle the endpoint of the last arc move of path
                     next_sub_path_id = prev_sub_path_id;
@@ -2679,17 +2898,17 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
                 // BBS: smooth triangle toolpaths corners including arc move which has internal interpolation point
                 for (int k = 0; k <= loop_num; k++) {
                     const Vec3f& prev = k==0?
-                                        gcode_result.moves[move_id - 1].position :
-                                        gcode_result.moves[move_id].interpolation_points[k-1];
+                                        moves[move_id - 1].position :
+                                        moves[move_id].interpolation_points[k-1];
                     const Vec3f& curr = k==interpolation_points_num?
-                                        gcode_result.moves[move_id].position :
-                                        gcode_result.moves[move_id].interpolation_points[k];
+                                        moves[move_id].position :
+                                        moves[move_id].interpolation_points[k];
                     const Vec3f& next = k < interpolation_points_num - 1?
-                                        gcode_result.moves[move_id].interpolation_points[k+1]:
-                                        (k == interpolation_points_num - 1? gcode_result.moves[move_id].position :
-                                        (gcode_result.moves[move_id + 1].is_arc_move_with_interpolation_points()?
-                                        gcode_result.moves[move_id + 1].interpolation_points[0] :
-                                        gcode_result.moves[move_id + 1].position));
+                                        moves[move_id].interpolation_points[k+1]:
+                                        (k == interpolation_points_num - 1? moves[move_id].position :
+                                        (moves[move_id + 1].is_arc_move_with_interpolation_points()?
+                                        moves[move_id + 1].interpolation_points[0] :
+                                        moves[move_id + 1].position));
 
                     const Vec3f prev_dir = (curr - prev).normalized();
                     const Vec3f prev_right = Vec3f(prev_dir.y(), -prev_dir.x(), 0.0f).normalized();
@@ -2841,7 +3060,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     seams_count = 0;
 
     for (size_t i = 0; i < m_moves_count; ++i) {
-        const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& curr = moves[i];
         if (curr.type == EMoveType::Seam)
             ++seams_count;
 
@@ -2851,10 +3070,10 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         if (i == 0)
             continue;
 
-        const GCodeProcessorResult::MoveVertex& prev = gcode_result.moves[i - 1];
+        const GCodeProcessorResult::MoveVertex& prev = moves[i - 1];
         const GCodeProcessorResult::MoveVertex* next = nullptr;
         if (i < m_moves_count - 1)
-            next = &gcode_result.moves[i + 1];
+            next = &moves[i + 1];
 
         ++progress_count;
         if (progress_dialog != nullptr && progress_count % progress_threshold == 0) {
@@ -3004,7 +3223,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     size_t last_travel_s_id = 0;
     seams_count = 0;
     for (size_t i = 0; i < m_moves_count; ++i) {
-        const GCodeProcessorResult::MoveVertex& move = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& move = moves[i];
         if (move.type == EMoveType::Seam)
             ++seams_count;
 
@@ -3207,6 +3426,7 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
         case EViewType::Height:         { color = m_extrusions.ranges.height.get_color_at(path.height); break; }
         case EViewType::Width:          { color = m_extrusions.ranges.width.get_color_at(path.width); break; }
         case EViewType::Feedrate:       { color = m_extrusions.ranges.feedrate.get_color_at(path.feedrate); break; }
+        case EViewType::ActualSpeed:    { color = m_extrusions.ranges.actual_speed.get_color_at(path.actual_speed); break; }
         case EViewType::FanSpeed:       { color = m_extrusions.ranges.fan_speed.get_color_at(path.fan_speed); break; }
         case EViewType::Temperature:    { color = m_extrusions.ranges.temperature.get_color_at(path.temperature); break; }
         case EViewType::LayerTime:      { color = m_extrusions.ranges.layer_duration.get_color_at(path.layer_time); break; }
@@ -3234,7 +3454,9 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
         return color;
     };
 
-    auto travel_color = [](const Path& path) {
+    auto travel_color = [this](const Path& path) {
+        if (m_view_type == EViewType::ActualSpeed)
+            return m_extrusions.ranges.actual_speed.get_color_at(path.actual_speed);
         return (path.delta_extruder < 0.0f) ? Travel_Colors[2] /* Retract */ :
             ((path.delta_extruder > 0.0f) ? Travel_Colors[1] /* Extrude */ :
                 Travel_Colors[0] /* Move */);
@@ -3404,7 +3626,7 @@ m_no_render_path = false;
                             if (buffer.render_primitive_type == TBuffer::ERenderPrimitiveType::Line) {
                                 for (size_t i = sub_path.first.s_id + 1; i < m_sequential_view.current.last + 1; i++) {
                                     size_t move_id = m_ssid_to_moveid_map[i];
-                                    const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
+                                    const GCodeProcessorResult::MoveVertex& curr = render_move_at(move_id);
                                     if (curr.is_arc_move()) {
                                         offset += curr.interpolation_points.size();
                                     }
@@ -3416,7 +3638,7 @@ m_no_render_path = false;
                                 // BBS: modify to support moves which has internal point
                                 for (size_t i = sub_path.first.s_id + 1; i < m_sequential_view.current.last + 1; i++) {
                                     size_t move_id = m_ssid_to_moveid_map[i];
-                                    const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
+                                    const GCodeProcessorResult::MoveVertex& curr = render_move_at(move_id);
                                     if (curr.is_arc_move()) {
                                         offset += curr.interpolation_points.size();
                                     }
@@ -3514,7 +3736,7 @@ m_no_render_path = false;
             unsigned int segments_count = max_s_id - min_s_id;
             for (size_t i = min_s_id + 1; i < max_s_id + 1; i++) {
                 size_t move_id = m_ssid_to_moveid_map[i];
-                const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
+                const GCodeProcessorResult::MoveVertex& curr = render_move_at(move_id);
                 if (curr.is_arc_move()) {
                     segments_count += curr.interpolation_points.size();
                 }
@@ -4876,6 +5098,11 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         imgui.title(_u8L("Speed (mm/s)"));
         break;
     }
+    case EViewType::ActualSpeed:
+    {
+        imgui.title(_u8L("Actual speed (mm/s)"));
+        break;
+    }
 
     case EViewType::FanSpeed:       { imgui.title(_u8L("Fan Speed (%)")); break; }
     case EViewType::Temperature:    { imgui.title(_u8L("Temperature (°C)")); break; }
@@ -5027,6 +5254,24 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         append_item(EItemType::None, Travel_Colors[0], { {_u8L("travel"), offsets[0] }}, true, predictable_icon_pos/*ORCA checkbox_pos*/, travel_visible, [this, travel_visible]() {
             m_buffers[buffer_id(EMoveType::Travel)].visible = !m_buffers[buffer_id(EMoveType::Travel)].visible;
             // update buffers' render paths, and update m_tools.m_tool_colors and m_extrusions.ranges
+            refresh(*m_gcode_result, wxGetApp().plater()->get_extruder_colors_from_plater_config(m_gcode_result));
+            update_moves_slider();
+            wxGetApp().plater()->get_current_canvas3D()->set_as_dirty();
+            });
+        ImGui::PopStyleVar(1);
+        break;
+    }
+    case EViewType::ActualSpeed:       {
+        append_range(m_extrusions.ranges.actual_speed, 0);
+        ImGui::Spacing();
+        ImGui::Dummy({ window_padding, window_padding });
+        ImGui::SameLine();
+        offsets = calculate_offsets({ { _u8L("Options"), { _u8L("Travel")}}, { _u8L("Display"), {""}} }, icon_size);
+        append_headers({ {_u8L("Options"), offsets[0] }, { _u8L("Display"), offsets[1]} });
+        const bool travel_visible = m_buffers[buffer_id(EMoveType::Travel)].visible;
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 3.0f));
+        append_item(EItemType::None, Travel_Colors[0], { {_u8L("travel"), offsets[0] }}, true, predictable_icon_pos/*ORCA checkbox_pos*/, travel_visible, [this, travel_visible]() {
+            m_buffers[buffer_id(EMoveType::Travel)].visible = !m_buffers[buffer_id(EMoveType::Travel)].visible;
             refresh(*m_gcode_result, wxGetApp().plater()->get_extruder_colors_from_plater_config(m_gcode_result));
             update_moves_slider();
             wxGetApp().plater()->get_current_canvas3D()->set_as_dirty();

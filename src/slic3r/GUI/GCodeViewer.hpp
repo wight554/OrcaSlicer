@@ -217,6 +217,7 @@ class GCodeViewer
         float height{ 0.0f };
         float width{ 0.0f };
         float feedrate{ 0.0f };
+        float actual_speed{ 0.0f };
         float fan_speed{ 0.0f };
         float temperature{ 0.0f };
         float volumetric_rate{ 0.0f };
@@ -430,6 +431,8 @@ class GCodeViewer
             // Color mapping by layer time.
             Range layer_duration;
 Range layer_duration_log;
+            // Color mapping by actual speed (requested fallback when unavailable).
+            Range actual_speed;
             void reset() {
                 height.reset();
                 width.reset();
@@ -439,6 +442,7 @@ Range layer_duration_log;
                 temperature.reset();
                 layer_duration.reset();
                 layer_duration_log.reset(true);
+                actual_speed.reset();
             }
         };
 
@@ -698,6 +702,7 @@ public:
         Marker marker;
         GCodeWindow gcode_window;
         std::vector<unsigned int> gcode_ids;
+        std::vector<float> actual_speeds;
         float m_scale = 1.0;
         bool m_show_marker = false;
         void render(const bool has_render_path, float legend_height, int canvas_width, int canvas_height, int right_margin, const EViewType& view_type);
@@ -715,6 +720,7 @@ public:
         Height,
         Width,
         Feedrate,
+        ActualSpeed,
         FanSpeed,
         Temperature,
         VolumetricRate,
@@ -738,6 +744,9 @@ private:
     //BBS: add only gcode mode
     bool m_only_gcode_in_preview {false};
     std::vector<size_t> m_ssid_to_moveid_map;
+
+    std::vector<GCodeProcessorResult::MoveVertex> m_preview_moves;
+    bool m_preview_moves_ready{ false };
 
     std::vector<TBuffer> m_buffers{ static_cast<size_t>(EMoveType::Extrude) };
     // bounding box of toolpaths
@@ -889,7 +898,11 @@ public:
     void pop_combo_style();
 
 private:
-    void load_toolpaths(const GCodeProcessorResult& gcode_result, const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box);
+    void load_toolpaths(const GCodeProcessorResult& gcode_result, const std::vector<GCodeProcessorResult::MoveVertex>& preview_moves,
+        const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box);
+    void rebuild_preview_moves(const GCodeProcessorResult& gcode_result);
+    void append_segmented_move(const GCodeProcessorResult::MoveVertex& move, Vec3f start_position);
+    const GCodeProcessorResult::MoveVertex& render_move_at(size_t idx) const;
     //BBS: always load shell at preview
     //void load_shells(const Print& print);
     void refresh_render_paths(bool keep_sequential_current_first, bool keep_sequential_current_last) const;

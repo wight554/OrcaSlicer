@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <cmath>
 #include <assert.h>
 #include <GCode/GCodeProcessor.hpp>
 
@@ -41,6 +42,8 @@ void GCodeWriter::apply_print_config(const PrintConfig &print_config)
     };
     m_max_jerk_z = print_config.machine_max_jerk_z.values.front();
     m_max_jerk_e = print_config.machine_max_jerk_e.values.front();
+    m_klipper_cruise_ratio = std::clamp(print_config.klipper_cruise_ratio.value, 0.01, 0.99);
+    m_last_klipper_cruise_ratio = -1.0;
 }
 
 void GCodeWriter::set_extruders(std::vector<unsigned int> extruder_ids)
@@ -205,9 +208,35 @@ std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned i
     bool separate_travel = (type == Acceleration::Travel && supports_separate_travel_acceleration(this->config.gcode_flavor));
 
     auto& last_value = separate_travel ? m_last_travel_acceleration : m_last_acceleration ;
-    if (acceleration == 0 || acceleration == last_value)
+    bool changed_accel = acceleration != 0 && acceleration != last_value;
+
+    if (FLAVOR_IS(gcfKlipper)) {
+        std::string ratio_token = klipper_cruise_ratio_token();
+        if (!changed_accel && ratio_token.empty())
         return std::string();
     
+        std::ostringstream gcode;
+        gcode << "SET_VELOCITY_LIMIT";
+        bool emitted_accel = false;
+        if (changed_accel) {
+            gcode << " ACCEL=" << acceleration;
+            if (this->config.accel_to_decel_enable) {
+                gcode << " ACCEL_TO_DECEL=" << acceleration * this->config.accel_to_decel_factor / 100;
+            }
+            last_value = acceleration;
+            emitted_accel = true;
+        }
+        if (!ratio_token.empty())
+            gcode << ratio_token;
+        if (emitted_accel && GCodeWriter::full_gcode_comment)
+            gcode << " ; adjust acceleration";
+        gcode << "\n";
+        return gcode.str();
+    }
+
+    if (!changed_accel)
+        return std::string();
+
     last_value = acceleration;
     
     std::ostringstream gcode;
@@ -215,14 +244,6 @@ std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned i
         gcode << (separate_travel ? "M202 X" : "M201 X") << acceleration << " Y" << acceleration;
     else if (FLAVOR_IS(gcfRepRapFirmware) || FLAVOR_IS(gcfMarlinFirmware))
         gcode << (separate_travel ? "M204 T" : "M204 P") << acceleration;
-    else if (FLAVOR_IS(gcfKlipper)) {
-        gcode << "SET_VELOCITY_LIMIT ACCEL=" << acceleration;
-        if (this->config.accel_to_decel_enable) {
-            gcode << " ACCEL_TO_DECEL=" << acceleration * this->config.accel_to_decel_factor / 100;
-            if (GCodeWriter::full_gcode_comment)
-                gcode << " ; adjust ACCEL_TO_DECEL";
-        }
-    }
     else
         gcode << "M204 S" << acceleration;
 
@@ -234,21 +255,44 @@ std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned i
 
 std::string GCodeWriter::set_jerk_xy(double jerk)
 {
-    if (jerk < 0.01 || is_approx(jerk, m_last_jerk))
+    bool valid_jerk = jerk >= 0.01;
+    bool changed_jerk = valid_jerk && !is_approx(jerk, m_last_jerk);
+
+    if (FLAVOR_IS(gcfKlipper)) {
+        std::string ratio_token = klipper_cruise_ratio_token();
+        if (!changed_jerk && ratio_token.empty())
         return std::string();
-    
+
+    std::ostringstream gcode;
+        gcode << "SET_VELOCITY_LIMIT";
+        bool emitted_jerk = false;
+        if (changed_jerk) {
+            double jerk_x = jerk;
+        // Clamp the jerk to the allowed maximum.
+            if (m_max_jerk_x > 0 && jerk_x > m_max_jerk_x)
+                jerk_x = m_max_jerk_x;
+            if (m_max_jerk_y > 0 && jerk_x > m_max_jerk_y)
+                jerk_x = m_max_jerk_y;
+            gcode << " SQUARE_CORNER_VELOCITY=" << jerk_x;
+            m_last_jerk = jerk_x;
+            emitted_jerk = true;
+        }
+        if (!ratio_token.empty())
+            gcode << ratio_token;
+        if (emitted_jerk && m_is_bbl_printers)
+            gcode << std::setprecision(2) << " Z" << m_max_jerk_z << " E" << m_max_jerk_e;
+        if (emitted_jerk && GCodeWriter::full_gcode_comment)
+            gcode << " ; adjust jerk";
+        gcode << "\n";
+        return gcode.str();
+    }
+
+    if (!changed_jerk)
+        return std::string();
+
     m_last_jerk = jerk;
 
     std::ostringstream gcode;
-    if (FLAVOR_IS(gcfKlipper)) {
-        // Clamp the jerk to the allowed maximum.
-        if (m_max_jerk_x > 0 && jerk > m_max_jerk_x)
-            jerk = m_max_jerk_x;
-        if (m_max_jerk_y > 0 && jerk > m_max_jerk_y)
-            jerk = m_max_jerk_y;
-        
-        gcode << "SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=" << jerk;
-    } else {
         double jerk_x = jerk;
         double jerk_y = jerk;
         // Clamp the axis jerk to the allowed maximum.
@@ -258,7 +302,6 @@ std::string GCodeWriter::set_jerk_xy(double jerk)
             jerk_y = m_max_jerk_y;
         
         gcode << "M205 X" << jerk_x << " Y" << jerk_y;
-    }
       
     if (m_is_bbl_printers)
         gcode << std::setprecision(2) << " Z" << m_max_jerk_z << " E" << m_max_jerk_e;
@@ -283,6 +326,8 @@ std::string GCodeWriter::set_accel_and_jerk(unsigned int acceleration, double je
     bool is_empty = true;
     std::ostringstream gcode;
     gcode << "SET_VELOCITY_LIMIT";
+    bool emitted_accel = false;
+    bool emitted_jerk = false;
     if (acceleration != 0 && acceleration != m_last_acceleration) {
         gcode << " ACCEL=" << acceleration;
         if (this->config.accel_to_decel_enable) {
@@ -290,6 +335,7 @@ std::string GCodeWriter::set_accel_and_jerk(unsigned int acceleration, double je
         }
         m_last_acceleration = acceleration;
         is_empty = false;
+        emitted_accel = true;
     }
     // Clamp the jerk to the allowed maximum.
     if (m_max_jerk_x > 0 && jerk > m_max_jerk_x)
@@ -301,17 +347,42 @@ std::string GCodeWriter::set_accel_and_jerk(unsigned int acceleration, double je
         gcode << " SQUARE_CORNER_VELOCITY=" << jerk;
         m_last_jerk = jerk;
         is_empty = false;
+        emitted_jerk = true;
+    }
+
+    std::string ratio_token = klipper_cruise_ratio_token();
+    if (!ratio_token.empty()) {
+        gcode << ratio_token;
+        is_empty = false;
     }
 
     if(is_empty)
         return std::string();
 
-    if (GCodeWriter::full_gcode_comment)
+    if ((emitted_accel || emitted_jerk) && GCodeWriter::full_gcode_comment)
         gcode << " ; adjust VELOCITY_LIMIT(accel/jerk)";
     gcode << "\n";
 
     return gcode.str();
 
+}
+
+std::string GCodeWriter::klipper_cruise_ratio_token()
+{
+    if (FLAVOR_IS_NOT(gcfKlipper))
+        return std::string();
+
+    if (m_klipper_cruise_ratio <= 0.0)
+        return std::string();
+
+    if (m_last_klipper_cruise_ratio >= 0.0 &&
+        std::abs(m_last_klipper_cruise_ratio - m_klipper_cruise_ratio) < 1e-6)
+        return std::string();
+
+    m_last_klipper_cruise_ratio = m_klipper_cruise_ratio;
+    std::ostringstream token;
+    token << " MINIMUM_CRUISE_RATIO=" << m_klipper_cruise_ratio;
+    return token.str();
 }
 
 std::string GCodeWriter::set_junction_deviation(double junction_deviation){

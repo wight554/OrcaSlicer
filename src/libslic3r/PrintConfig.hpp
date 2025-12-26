@@ -1140,6 +1140,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 resonance_avoidance))
     ((ConfigOptionFloat,                min_resonance_avoidance_speed))
     ((ConfigOptionFloat,                max_resonance_avoidance_speed))
+
+    ((ConfigOptionFloat,                klipper_cruise_ratio))
 )
 
 // This object is mapped to Perl as Slic3r::Config::GCode.
