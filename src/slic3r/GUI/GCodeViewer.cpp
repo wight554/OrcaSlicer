@@ -462,17 +462,22 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
             imgui.text(buf);
             break;
         }
-        // case EViewType::Feedrate: {
-        //     ImGui::SameLine(startx2);
-        //     sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
-        //     ImGui::PushItemWidth(item_size);
-        //     imgui.text(buf);
-        //     break;
-        // }
+        case EViewType::Feedrate: {
+            ImGui::SameLine(startx2);
+            sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
+            ImGui::PushItemWidth(item_size);
+            imgui.text(buf);
+            break;
+        }
         case EViewType::VolumetricRate: {
             if (m_curr_move.type != EMoveType::Extrude) break;
             ImGui::SameLine(startx2);
             sprintf(buf, "%s%.2f", flow.c_str(), m_curr_move.volumetric_rate());
+            ImGui::PushItemWidth(item_size);
+            imgui.text(buf);
+
+            ImGui::SameLine(startx3);
+            sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
             ImGui::PushItemWidth(item_size);
             imgui.text(buf);
             break;
