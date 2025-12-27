@@ -5952,11 +5952,15 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         float offset = calc_offset();
 
         if (!m_settings_ids.printer.empty()) {
+            ImGui::Dummy({ window_padding, window_padding });
+            ImGui::SameLine();
             imgui.text(_u8L("Printer") + ":");
             ImGui::SameLine(offset);
             imgui.text(m_settings_ids.printer);
         }
         if (!m_settings_ids.print.empty()) {
+            ImGui::Dummy({ window_padding, window_padding });
+            ImGui::SameLine();
             imgui.text(_u8L("Print settings") + ":");
             ImGui::SameLine(offset);
             imgui.text(m_settings_ids.print);
@@ -5966,6 +5970,8 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
                 if (i < static_cast<unsigned char>(m_settings_ids.filament.size()) && !m_settings_ids.filament[i].empty()) {
                     std::string txt = _u8L("Filament");
                     txt += (m_extruder_ids.size() == 1) ? ":" : " " + std::to_string(i + 1);
+                    ImGui::Dummy({ window_padding, window_padding });
+                    ImGui::SameLine();
                     imgui.text(txt);
                     ImGui::SameLine(offset);
                     imgui.text(m_settings_ids.filament[i]);
