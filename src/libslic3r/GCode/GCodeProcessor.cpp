@@ -242,14 +242,6 @@ static float max_allowable_speed(float acceleration, float target_velocity, floa
     return std::sqrt(value);
 }
 
-static float cruise_ratio_delta_distance(const GCodeProcessor::TimeBlock& block)
-{
-    if (!block.has_cruise_ratio())
-        return block.distance;
-    const float ratio = std::clamp(block.cruise_ratio, 0.0f, 1.0f);
-    return std::max(0.0f, (1.0f - ratio) * block.distance);
-}
-
 static float acceleration_time_from_distance(float initial_feedrate, float distance, float acceleration)
 {
     return (acceleration != 0.0f) ? (speed_from_distance(initial_feedrate, distance, acceleration) - initial_feedrate) / acceleration : 0.0f;
@@ -290,45 +282,22 @@ float GCodeProcessor::Trapezoid::cruise_distance() const
 void GCodeProcessor::TimeBlock::calculate_trapezoid()
 {
     trapezoid.cruise_feedrate = feedrate_profile.cruise;
-    cruise_ratio_applied = false;
 
-    auto set_segments = [&](float target_cruise) {
-        trapezoid.cruise_feedrate = target_cruise;
-        float accelerate_distance = std::max(0.0f, estimated_acceleration_distance(feedrate_profile.entry, target_cruise, acceleration));
-        float decelerate_distance = std::max(0.0f, estimated_acceleration_distance(target_cruise, feedrate_profile.exit, -acceleration));
-        float cruise_distance = distance - accelerate_distance - decelerate_distance;
+    float accelerate_distance = std::max(0.0f, estimated_acceleration_distance(feedrate_profile.entry, feedrate_profile.cruise, acceleration));
+    float decelerate_distance = std::max(0.0f, estimated_acceleration_distance(feedrate_profile.cruise, feedrate_profile.exit, -acceleration));
+    float cruise_distance = distance - accelerate_distance - decelerate_distance;
 
-        if (cruise_distance < 0.0f) {
-            accelerate_distance = std::clamp(intersection_distance(feedrate_profile.entry, feedrate_profile.exit, acceleration, distance), 0.0f, distance);
-            cruise_distance = 0.0f;
-            trapezoid.cruise_feedrate = speed_from_distance(feedrate_profile.entry, accelerate_distance, acceleration);
-            decelerate_distance = distance - accelerate_distance;
-        }
-
-        trapezoid.accelerate_until = accelerate_distance;
-        trapezoid.decelerate_after = accelerate_distance + cruise_distance;
-        return std::pair<float, float>(accelerate_distance, decelerate_distance);
-    };
-
-    auto [accelerate_distance, decelerate_distance] = set_segments(feedrate_profile.cruise);
-
-    if (has_cruise_ratio() && acceleration > 0.0f && distance > 0.0f) {
-        const float allowed = std::max(0.0f, (1.0f - cruise_ratio) * distance);
-        const float used = accelerate_distance + decelerate_distance;
-        if (used > allowed + 1e-4f) {
-            const float entry_sq = feedrate_profile.entry * feedrate_profile.entry;
-            const float exit_sq = feedrate_profile.exit * feedrate_profile.exit;
-            float limited_peak_sq = std::max(0.0f, acceleration * allowed + 0.5f * (entry_sq + exit_sq));
-            float limited_peak = std::sqrt(limited_peak_sq);
-            limited_peak = std::max(limited_peak, std::max(feedrate_profile.entry, feedrate_profile.exit));
-            limited_peak = std::min(limited_peak, trapezoid.cruise_feedrate);
-            auto segments = set_segments(limited_peak);
-            accelerate_distance = segments.first;
-            decelerate_distance = segments.second;
-            feedrate_profile.cruise = trapezoid.cruise_feedrate;
-            cruise_ratio_applied = true;
-        }
+    // Not enough space to reach the nominal feedrate.
+    // This means no cruising, and we'll have to use intersection_distance() to calculate when to abort acceleration
+    // and start braking in order to reach the exit_feedrate exactly at the end of this block.
+    if (cruise_distance < 0.0f) {
+        accelerate_distance = std::clamp(intersection_distance(feedrate_profile.entry, feedrate_profile.exit, acceleration, distance), 0.0f, distance);
+        cruise_distance = 0.0f;
+        trapezoid.cruise_feedrate = speed_from_distance(feedrate_profile.entry, accelerate_distance, acceleration);
     }
+
+    trapezoid.accelerate_until = accelerate_distance;
+    trapezoid.decelerate_after = accelerate_distance + cruise_distance;
 }
 
 float GCodeProcessor::TimeBlock::time() const
@@ -391,34 +360,27 @@ void GCodeProcessor::TimeMachine::simulate_st_synchronize(float additional_time)
     calculate_time(0, additional_time);
 }
 
-static bool planner_forward_pass_kernel(GCodeProcessor::TimeBlock& prev, GCodeProcessor::TimeBlock& curr)
+static void planner_forward_pass_kernel(GCodeProcessor::TimeBlock& prev, GCodeProcessor::TimeBlock& curr)
 {
-    bool updated = false;
     // If the previous block is an acceleration block, but it is not long enough to complete the
     // full speed change within the block, we need to adjust the entry speed accordingly. Entry
     // speeds have already been reset, maximized, and reverse planned by reverse planner.
     // If nominal length is true, max junction speed is guaranteed to be reached. No need to recheck.
     if (!prev.flags.nominal_length) {
         if (prev.feedrate_profile.entry < curr.feedrate_profile.entry) {
-            float entry_speed = std::min(
-                curr.feedrate_profile.entry,
-                max_allowable_speed(-prev.acceleration, prev.feedrate_profile.entry, cruise_ratio_delta_distance(prev)));
+            float entry_speed = std::min(curr.feedrate_profile.entry, max_allowable_speed(-prev.acceleration, prev.feedrate_profile.entry, prev.distance));
 
             // Check for junction speed change
             if (curr.feedrate_profile.entry != entry_speed) {
                 curr.feedrate_profile.entry = entry_speed;
                 curr.flags.recalculate = true;
-                updated = true;
             }
         }
     }
-    return updated;
 }
 
-static bool planner_reverse_pass_kernel(GCodeProcessor::TimeBlock& curr, GCodeProcessor::TimeBlock& next)
+static void planner_reverse_pass_kernel(GCodeProcessor::TimeBlock& curr, GCodeProcessor::TimeBlock& next)
 {
-    bool updated = false;
-    const float original_entry = curr.feedrate_profile.entry;
     // If entry speed is already at the maximum entry speed, no need to recheck. Block is cruising.
     // If not, block in state of acceleration or deceleration. Reset entry speed to maximum and
     // check for maximum allowable speed reductions to ensure maximum possible planned speed.
@@ -426,20 +388,12 @@ static bool planner_reverse_pass_kernel(GCodeProcessor::TimeBlock& curr, GCodePr
         // If nominal length true, max junction speed is guaranteed to be reached. Only compute
         // for max allowable speed if block is decelerating and nominal length is false.
         if (!curr.flags.nominal_length && curr.max_entry_speed > next.feedrate_profile.entry)
-            curr.feedrate_profile.entry = std::min(
-                curr.max_entry_speed,
-                max_allowable_speed(-curr.acceleration, next.feedrate_profile.entry, cruise_ratio_delta_distance(curr)));
+            curr.feedrate_profile.entry = std::min(curr.max_entry_speed, max_allowable_speed(-curr.acceleration, next.feedrate_profile.entry, curr.distance));
         else
             curr.feedrate_profile.entry = curr.max_entry_speed;
 
         curr.flags.recalculate = true;
-        updated = true;
     }
-
-    if (updated && curr.feedrate_profile.entry < original_entry - 1e-4f)
-        curr.lookahead_limited = true;
-
-    return updated;
 }
 
 static void recalculate_trapezoids(std::vector<GCodeProcessor::TimeBlock>& blocks)
@@ -461,7 +415,6 @@ static void recalculate_trapezoids(std::vector<GCodeProcessor::TimeBlock>& block
                 block.feedrate_profile.exit = next->feedrate_profile.entry;
                 block.calculate_trapezoid();
                 curr->trapezoid = block.trapezoid;
-                curr->feedrate_profile.cruise = block.feedrate_profile.cruise;
                 curr->flags.recalculate = false; // Reset current only to ensure next trapezoid is computed
             }
         }
@@ -473,7 +426,6 @@ static void recalculate_trapezoids(std::vector<GCodeProcessor::TimeBlock>& block
         block.feedrate_profile.exit = next->safe_feedrate;
         block.calculate_trapezoid();
         next->trapezoid = block.trapezoid;
-        next->feedrate_profile.cruise = block.feedrate_profile.cruise;
         next->flags.recalculate = false;
     }
 }
@@ -485,23 +437,16 @@ void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, floa
 
     assert(keep_last_n_blocks <= blocks.size());
 
-    for (TimeBlock& block : blocks)
-        block.lookahead_limited = false;
+    // forward_pass
+    for (size_t i = 0; i + 1 < blocks.size(); ++i) {
+        planner_forward_pass_kernel(blocks[i], blocks[i + 1]);
+    }
 
-    const size_t max_iterations = klipper_mode ? 4 : 1;
-    size_t iteration = 0;
-    bool updated = false;
-    do {
-        updated = false;
-        for (size_t i = 0; i + 1 < blocks.size(); ++i)
-            updated |= planner_forward_pass_kernel(blocks[i], blocks[i + 1]);
+    // reverse_pass
+    for (int i = static_cast<int>(blocks.size()) - 1; i > 0; --i)
+        planner_reverse_pass_kernel(blocks[i - 1], blocks[i]);
 
-        for (int i = static_cast<int>(blocks.size()) - 1; i > 0; --i)
-            updated |= planner_reverse_pass_kernel(blocks[i - 1], blocks[i]);
-
-        recalculate_trapezoids(blocks);
-        ++iteration;
-    } while (klipper_mode && updated && iteration < max_iterations);
+    recalculate_trapezoids(blocks);
 
     size_t n_blocks_process = blocks.size() - keep_last_n_blocks;
     for (size_t i = 0; i < n_blocks_process; ++i) {
@@ -3209,6 +3154,8 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             if (limited)
                 vmax_junction *= v_factor;
 
+            // Calculate SCV-limited junction velocity for Klipper preview (stored separately)
+            float vmax_junction_scv = vmax_junction;
             if (is_klipper && block.has_xy_motion) {
                 auto has_xy_direction = [](const Vec3f& dir) {
                     return std::abs(dir.x()) > 1e-5f || std::abs(dir.y()) > 1e-5f;
@@ -3227,8 +3174,8 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                         float theta = std::acos(dot);
                         float sin_half = std::max(std::sin(0.5f * theta), 1e-4f);
                         float v_corner = current_scv(static_cast<PrintEstimatedStatistics::ETimeMode>(i)) / sin_half;
-                        if (v_corner < vmax_junction) {
-                            vmax_junction = v_corner;
+                        if (v_corner < vmax_junction_scv) {
+                            vmax_junction_scv = v_corner;
                             block.scv_limited = true;
                         }
                     }
@@ -3242,9 +3189,17 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             // Not coasting. The machine will stop and start the movements anyway, better to start the segment from start.
             if (prev.safe_feedrate > vmax_junction_threshold && curr.safe_feedrate > vmax_junction_threshold)
                 vmax_junction = curr.safe_feedrate;
+
+            // Apply same coasting logic to SCV-limited value
+            float vmax_junction_scv_threshold = vmax_junction_scv * 0.99f;
+            if (prev.safe_feedrate > vmax_junction_scv_threshold && curr.safe_feedrate > vmax_junction_scv_threshold)
+                vmax_junction_scv = curr.safe_feedrate;
+
+            // Store SCV-limited junction velocity for preview
+            block.scv_max_entry_speed = vmax_junction_scv;
         }
 
-        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, cruise_ratio_delta_distance(block));
+        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
         block.feedrate_profile.entry = std::min(vmax_junction, v_allowable);
 
         block.max_entry_speed = vmax_junction;
@@ -3676,6 +3631,8 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             if (limited)
                 vmax_junction *= v_factor;
 
+            // Calculate SCV-limited junction velocity for Klipper preview (stored separately)
+            float vmax_junction_scv = vmax_junction;
             if (is_klipper && block.has_xy_motion) {
                 auto has_xy_direction = [](const Vec3f& dir) {
                     return std::abs(dir.x()) > 1e-5f || std::abs(dir.y()) > 1e-5f;
@@ -3694,8 +3651,8 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                         float theta = std::acos(dot);
                         float sin_half = std::max(std::sin(0.5f * theta), 1e-4f);
                         float v_corner = current_scv(static_cast<PrintEstimatedStatistics::ETimeMode>(i)) / sin_half;
-                        if (v_corner < vmax_junction) {
-                            vmax_junction = v_corner;
+                        if (v_corner < vmax_junction_scv) {
+                            vmax_junction_scv = v_corner;
                             block.scv_limited = true;
                         }
                     }
@@ -3709,9 +3666,17 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             //BBS: Not coasting. The machine will stop and start the movements anyway, better to start the segment from start.
             if ((prev.safe_feedrate > vmax_junction_threshold) && (curr.safe_feedrate > vmax_junction_threshold))
                 vmax_junction = curr.safe_feedrate;
+
+            // Apply same coasting logic to SCV-limited value
+            float vmax_junction_scv_threshold = vmax_junction_scv * 0.99f;
+            if (prev.safe_feedrate > vmax_junction_scv_threshold && curr.safe_feedrate > vmax_junction_scv_threshold)
+                vmax_junction_scv = curr.safe_feedrate;
+
+            // Store SCV-limited junction velocity for preview
+            block.scv_max_entry_speed = vmax_junction_scv;
         }
 
-        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, cruise_ratio_delta_distance(block));
+        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
         block.feedrate_profile.entry = std::min(vmax_junction, v_allowable);
 
         block.max_entry_speed = vmax_junction;
@@ -5212,15 +5177,63 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
         return;
     }
 
-    const float accelerate_distance = block.trapezoid.accelerate_until;
-    const float cruise_distance = block.trapezoid.cruise_distance();
-    const float decelerate_distance = std::max(0.0f, block.distance - block.trapezoid.decelerate_after);
+    // Start with time estimation trapezoid values
+    float entry_speed = block.feedrate_profile.entry;
+    float exit_speed = block.feedrate_profile.exit;
+    float peak_speed = block.trapezoid.cruise_feedrate;
+    float accelerate_distance = block.trapezoid.accelerate_until;
+    float decelerate_distance = std::max(0.0f, block.distance - block.trapezoid.decelerate_after);
+    float cruise_distance = block.trapezoid.cruise_distance();
+
+    // For preview, apply Klipper-specific constraints that don't affect time estimation.
+    // First apply SCV-limited entry speed if applicable.
+    if (block.scv_limited && block.scv_max_entry_speed > 0.0f && block.scv_max_entry_speed < entry_speed) {
+        entry_speed = block.scv_max_entry_speed;
+        // Recalculate trapezoid with SCV-limited entry
+        accelerate_distance = std::max(0.0f, estimated_acceleration_distance(entry_speed, peak_speed, block.acceleration));
+        decelerate_distance = std::max(0.0f, estimated_acceleration_distance(peak_speed, exit_speed, -block.acceleration));
+        cruise_distance = block.distance - accelerate_distance - decelerate_distance;
+        if (cruise_distance < 0.0f) {
+            accelerate_distance = std::clamp(intersection_distance(entry_speed, exit_speed, block.acceleration, block.distance), 0.0f, block.distance);
+            cruise_distance = 0.0f;
+            peak_speed = speed_from_distance(entry_speed, accelerate_distance, block.acceleration);
+            decelerate_distance = block.distance - accelerate_distance;
+        }
+    }
+
+    // Then apply cruise ratio limiting on top of SCV.
+    bool cruise_ratio_applied = false;
+    if (block.has_cruise_ratio() && block.acceleration > 0.0f && block.distance > 0.0f) {
+        const float allowed = std::max(0.0f, (1.0f - block.cruise_ratio) * block.distance);
+        const float used = accelerate_distance + decelerate_distance;
+        if (used > allowed + 1e-4f) {
+            const float entry_sq = entry_speed * entry_speed;
+            const float exit_sq = exit_speed * exit_speed;
+            float limited_peak_sq = std::max(0.0f, block.acceleration * allowed + 0.5f * (entry_sq + exit_sq));
+            float limited_peak = std::sqrt(limited_peak_sq);
+            limited_peak = std::max(limited_peak, std::max(entry_speed, exit_speed));
+            limited_peak = std::min(limited_peak, peak_speed);
+
+            // Recalculate trapezoid segments with limited peak speed
+            peak_speed = limited_peak;
+            accelerate_distance = std::max(0.0f, estimated_acceleration_distance(entry_speed, peak_speed, block.acceleration));
+            decelerate_distance = std::max(0.0f, estimated_acceleration_distance(peak_speed, exit_speed, -block.acceleration));
+            cruise_distance = block.distance - accelerate_distance - decelerate_distance;
+            if (cruise_distance < 0.0f) {
+                accelerate_distance = std::clamp(intersection_distance(entry_speed, exit_speed, block.acceleration, block.distance), 0.0f, block.distance);
+                cruise_distance = 0.0f;
+                peak_speed = speed_from_distance(entry_speed, accelerate_distance, block.acceleration);
+                decelerate_distance = block.distance - accelerate_distance;
+            }
+            cruise_ratio_applied = true;
+        }
+    }
 
     auto resolve_factor = [&]() {
         using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
         if (block.flags.prepare_stage)
             return Limiter::Prepare;
-        if (block.cruise_ratio_applied)
+        if (cruise_ratio_applied)
             return Limiter::CruiseRatio;
         if (block.scv_limited)
             return Limiter::SCV;
@@ -5232,27 +5245,24 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
     };
 
     const auto limiting_factor = resolve_factor();
-    const float entry_speed = block.feedrate_profile.entry;
-    const float exit_speed = block.feedrate_profile.exit;
-    const float peak_speed = block.trapezoid.cruise_feedrate;
-    const float requested_speed = (block.requested_feedrate > 0.0f) ? block.requested_feedrate : peak_speed;
-        const float total_distance = std::max(0.0f, block.distance);
-        auto resolve_phase = [&](float accel_d, float cruise_d, float decel_d) {
-            using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
-            const float accel = std::max(0.0f, accel_d);
-            const float cruise = std::max(0.0f, cruise_d);
-            const float decel = std::max(0.0f, decel_d);
-            if (total_distance <= 0.0f)
-                return Phase::Unknown;
-            if (accel >= cruise && accel >= decel && accel > 0.0f)
-                return Phase::Acceleration;
-            if (decel >= accel && decel >= cruise && decel > 0.0f)
-                return Phase::Deceleration;
-            if (cruise > 0.0f)
-                return Phase::Cruise;
+    const float requested_speed = (block.requested_feedrate > 0.0f) ? block.requested_feedrate : block.trapezoid.cruise_feedrate;
+    const float total_distance = std::max(0.0f, block.distance);
+    auto resolve_phase = [&](float accel_d, float cruise_d, float decel_d) {
+        using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+        const float accel = std::max(0.0f, accel_d);
+        const float cruise = std::max(0.0f, cruise_d);
+        const float decel = std::max(0.0f, decel_d);
+        if (total_distance <= 0.0f)
             return Phase::Unknown;
-        };
-        const auto phase = resolve_phase(accelerate_distance, cruise_distance, decelerate_distance);
+        if (accel >= cruise && accel >= decel && accel > 0.0f)
+            return Phase::Acceleration;
+        if (decel >= accel && decel >= cruise && decel > 0.0f)
+            return Phase::Deceleration;
+        if (cruise > 0.0f)
+            return Phase::Cruise;
+        return Phase::Unknown;
+    };
+    const auto phase = resolve_phase(accelerate_distance, cruise_distance, decelerate_distance);
 
     for (size_t idx = range.first; idx <= range.second && idx < m_result.moves.size(); ++idx) {
         auto& move = m_result.moves[idx];
@@ -5266,7 +5276,7 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
         kin.decelerate_distance = decelerate_distance;
         kin.limiting_factor = limiting_factor;
         kin.has_kinematics = true;
-            kin.phase = phase;
+        kin.phase = phase;
     }
 
     m_g1_to_move_range.erase(it);

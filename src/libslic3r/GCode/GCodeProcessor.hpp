@@ -463,6 +463,7 @@ class Print;
             float distance{ 0.0f }; // mm
             float acceleration{ 0.0f }; // mm/s^2
             float max_entry_speed{ 0.0f }; // mm/s
+            float scv_max_entry_speed{ 0.0f }; // mm/s - SCV-limited junction speed for preview
             float safe_feedrate{ 0.0f }; // mm/s
             float cruise_ratio{ 0.0f };
             float requested_feedrate{ 0.0f }; // mm/s
